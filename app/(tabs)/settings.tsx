@@ -3,9 +3,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Moon, LogOut } from 'lucide-react-native';
 import { useThemeStore } from '@/store/useThemeStore';
+import { useTheme } from '@/constants/theme';
 
 export default function SettingsScreen() {
   const { isDarkMode, toggleTheme } = useThemeStore();
+  const theme = useTheme();
 
   const handleLogout = () => {
     Alert.alert(
@@ -26,31 +28,31 @@ export default function SettingsScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
       <View style={styles.content}>
-        <Text style={styles.title}>Settings</Text>
+        <Text style={[styles.title, { color: theme.colors.text }]}>Configurações</Text>
         
-        <View style={styles.section}>
+        <View style={[styles.section, { backgroundColor: theme.colors.card }]}>
           <View style={styles.settingItem}>
             <View style={styles.settingLeft}>
-              <Moon size={20} color="#6B7280" />
-              <Text style={styles.settingText}>Dark Mode</Text>
+              <Moon size={20} color={theme.colors.textSecondary} />
+              <Text style={[styles.settingText, { color: theme.colors.text }]}>Modo Escuro</Text>
             </View>
             <Switch
               value={isDarkMode}
               onValueChange={toggleTheme}
-              trackColor={{ false: '#D1D5DB', true: '#93C5FD' }}
-              thumbColor={isDarkMode ? '#3B82F6' : '#FFFFFF'}
+              trackColor={{ false: theme.colors.border, true: theme.colors.primaryLight }}
+              thumbColor={isDarkMode ? theme.colors.primary : theme.colors.card}
             />
           </View>
         </View>
 
         <TouchableOpacity 
-          style={styles.logoutButton}
+          style={[styles.logoutButton, { backgroundColor: theme.colors.error }]}
           onPress={handleLogout}
         >
-          <LogOut size={20} color="#FFFFFF" />
-          <Text style={styles.logoutText}>Logout</Text>
+          <LogOut size={20} color="white" />
+          <Text style={styles.logoutText}>Sair</Text>
         </TouchableOpacity>
       </View>
     </SafeAreaView>
@@ -60,7 +62,6 @@ export default function SettingsScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
   },
   content: {
     flex: 1,
@@ -73,7 +74,6 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter-Bold',
   },
   section: {
-    backgroundColor: '#F9FAFB',
     borderRadius: 12,
     padding: 8,
     marginBottom: 24,
@@ -91,11 +91,9 @@ const styles = StyleSheet.create({
   settingText: {
     marginLeft: 12,
     fontSize: 16,
-    color: '#1F2937',
     fontFamily: 'Inter-Regular',
   },
   logoutButton: {
-    backgroundColor: '#EF4444',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',

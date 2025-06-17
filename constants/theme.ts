@@ -1,4 +1,7 @@
-export const theme = {
+import { useThemeStore } from '@/store/useThemeStore';
+
+// Definindo o tema base
+const baseTheme = {
   colors: {
     primary: '#3B82F6',       // Blue
     primaryLight: '#93C5FD',  // Light Blue
@@ -55,4 +58,53 @@ export const theme = {
   },
 };
 
-export type Theme = typeof theme;
+// Criando os temas claro e escuro
+export const lightTheme = { ...baseTheme };
+export const darkTheme = {
+  ...baseTheme,
+  colors: {
+    ...baseTheme.colors,
+    background: '#1F2937',    // Dark Gray
+    card: '#374151',          // Darker Gray
+    text: '#F9FAFB',          // Almost White
+    textSecondary: '#D1D5DB', // Light Gray
+    border: '#4B5563',        // Medium Gray
+    inputBackground: '#374151', // Darker Gray
+  },
+  shadows: {
+    small: {
+      ...baseTheme.shadows.small,
+      shadowOpacity: 0.3,
+    },
+    medium: {
+      ...baseTheme.shadows.medium,
+      shadowOpacity: 0.35,
+    },
+    large: {
+      ...baseTheme.shadows.large,
+      shadowOpacity: 0.4,
+    },
+  },
+};
+
+export type Theme = typeof lightTheme;
+
+// Tema padrão que será usado como fallback
+export const defaultTheme = lightTheme;
+
+// Hook para usar o tema dinâmico
+export const useTheme = () => {
+  const isDarkMode = useThemeStore((state) => state.isDarkMode);
+  return isDarkMode ? darkTheme : lightTheme;
+};
+
+// Hook seguro para componentes React
+export const useSafeTheme = () => {
+  try {
+    const isDarkMode = useThemeStore((state) => state.isDarkMode);
+    return isDarkMode ? darkTheme : lightTheme;
+  } catch (error) {
+    console.warn('Erro ao obter tema, usando tema padrão:', error);
+    return defaultTheme;
+  }
+};
