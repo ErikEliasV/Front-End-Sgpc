@@ -2,7 +2,7 @@
 // Aqui você pode configurar sua navegação usando React Navigation ou outra biblioteca
 
 import Home from '../screens/Home';
-import Profile from '../screens/Profile';
+import Dashboard from '../screens/Dashboard';
 import Settings from '../screens/Settings';
 import Register from '../screens/Register';
 import Login from '../screens/Login';
@@ -12,7 +12,7 @@ import ResetPassword from '../screens/ResetPassword';
 // Exportando as telas para uso nas rotas
 export {
   Home,
-  Profile,
+  Dashboard,
   Settings,
   Register,
   Login,
@@ -48,9 +48,9 @@ export const routes = [
     title: 'Início',
   },
   {
-    name: 'Profile',
-    component: Profile,
-    title: 'Perfil',
+    name: 'Dashboard',
+    component: Dashboard,
+    title: 'Dashboard',
   },
   {
     name: 'Settings',
