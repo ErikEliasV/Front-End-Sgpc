@@ -2,7 +2,8 @@
 // Facilita as importações: import { Button, OutroComponente } from '../components'
 
 export { default as Button } from './Button';
-
+export { default as DatePicker } from './DatePicker';
+ 
 // Adicione outros componentes aqui conforme você os criar:
 // export { default as Card } from './Card';
 // export { default as Header } from './Header';
