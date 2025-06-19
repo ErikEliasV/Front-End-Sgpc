@@ -10,6 +10,7 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 
 const Login = ({ navigation }) => {
@@ -74,15 +75,28 @@ const Login = ({ navigation }) => {
       const result = await response.json();
 
       if (response.ok) {
+        // Salvar o token no AsyncStorage
+        const token = result.token || result.accessToken || result.data?.token;
+        if (token) {
+          await AsyncStorage.setItem('userToken', token);
+          console.log('✅ Token salvo:', token);
+        } else {
+          console.log('⚠️ Token não encontrado na resposta:', result);
+        }
+        
+        // Salvar dados do usuário se disponível
+        if (result.user || result.data?.user) {
+          const userData = result.user || result.data.user;
+          await AsyncStorage.setItem('userData', JSON.stringify(userData));
+          console.log('✅ Dados do usuário salvos:', userData);
+        }
+
         Alert.alert('Sucesso', 'Login realizado com sucesso!', [
           {
             text: 'OK',
             onPress: () => {
-              // Aqui você pode salvar o token e navegar para a tela principal
-              console.log('Login realizado:', result);
-              console.log('Token:', result.token || result.accessToken);
-              // Exemplo: AsyncStorage.setItem('token', result.token);
-              navigation.navigate('Home');
+              console.log('🚀 Navegando para MainApp...');
+              navigation.navigate('MainApp');
             }
           }
         ]);
