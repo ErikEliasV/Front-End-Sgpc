@@ -386,11 +386,6 @@ Este projeto está sob a licença MIT. Veja o arquivo [LICENSE](LICENSE) para ma
 
 **Desenvolvido com ❤️ para otimizar a gestão de projetos de construção**
 
-### **Contato**
-- 📧 Email: [seu-email@exemplo.com]
-- 💼 LinkedIn: [seu-linkedin]
-- 🐙 GitHub: [seu-github]
-
 ---
 
 ## 🙏 Agradecimentos
