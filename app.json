@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "TaskManager",
-    "slug": "TaskManager",
+    "name": "Obra Fácil",
+    "slug": "obra-facil",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",

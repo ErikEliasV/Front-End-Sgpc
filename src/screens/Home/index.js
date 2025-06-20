@@ -14,7 +14,7 @@ const Home = ({ navigation }) => {
       <View style={styles.header}>
         <View style={styles.greeting}>
           <Text style={styles.title}>Olá, Usuário! 👋</Text>
-          <Text style={styles.subtitle}>Bem-vindo de volta ao TaskManager</Text>
+          <Text style={styles.subtitle}>Bem-vindo de volta ao Obra Fácil</Text>
         </View>
         <TouchableOpacity style={styles.notificationButton}>
           <Ionicons name="notifications-outline" size={24} color="#fff" />
@@ -122,7 +122,7 @@ const Home = ({ navigation }) => {
             <View style={styles.taskFooter}>
               <Text style={styles.taskDate}>Concluído há 2 horas</Text>
               <View style={styles.taskProject}>
-                <Text style={styles.projectText}>TaskManager</Text>
+                <Text style={styles.projectText}>Obra Fácil</Text>
               </View>
             </View>
           </View>

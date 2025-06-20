@@ -1,6 +1,6 @@
-# 🛠️ Guia de Desenvolvimento - TaskManager
+# 🛠️ Guia de Desenvolvimento - Obra Fácil
 
-Este documento contém informações técnicas detalhadas para desenvolvedores que desejam contribuir com o projeto TaskManager.
+Este documento contém informações técnicas detalhadas para desenvolvedores que desejam contribuir com o projeto Obra Fácil.
 
 ## 📋 Estrutura de Desenvolvimento
 
@@ -228,9 +228,9 @@ test('should call onPress when button is pressed', () => {
 #### **app.json**
 ```json
 {
-  "expo": {
-    "name": "TaskManager",
-    "slug": "TaskManager",
+   "expo": {
+     "name": "Obra Fácil",
+     "slug": "obra-facil",
     "version": "1.0.0",
     "orientation": "portrait",
     "newArchEnabled": true
@@ -280,7 +280,7 @@ console.log(`Load time: ${loadTime}ms`);
 #### **1. Setup Inicial**
 ```bash
 git clone <repo>
-cd TaskManager
+cd ObraFacil
 npm install
 npx expo start --tunnel
 ```

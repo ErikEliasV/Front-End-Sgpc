@@ -58,7 +58,7 @@ const AppNavigator = () => {
           name="MainApp" 
           component={TabNavigator}
           options={{
-            title: 'TaskManager'
+            title: 'Obra Fácil'
           }}
         />
         <Stack.Screen 

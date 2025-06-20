@@ -1,7 +1,7 @@
-# 🏗️ TaskManager - Sistema de Gerenciamento de Projetos de Construção
+# 🏗️ Obra Fácil - Sistema de Gerenciamento de Projetos de Construção
 
 <div align="center">
-  <img src="./assets/icon.png" alt="TaskManager Logo" width="120" height="120">
+  <img src="./assets/icon.png" alt="Obra Fácil Logo" width="120" height="120">
   
   **Sistema completo de gerenciamento de projetos de construção com controle de custos, tarefas e equipes**
   
@@ -14,7 +14,7 @@
 
 ## 📱 Sobre o Projeto
 
-O **TaskManager** é um aplicativo mobile desenvolvido em React Native para gerenciamento completo de projetos de construção. O sistema oferece controle total sobre projetos, tarefas, equipes, materiais e custos, sendo ideal para empresas de construção civil, engenheiros e gerentes de projeto.
+O **Obra Fácil** é um aplicativo mobile desenvolvido em React Native para gerenciamento completo de projetos de construção. O sistema oferece controle total sobre projetos, tarefas, equipes, materiais e custos, sendo ideal para empresas de construção civil, engenheiros e gerentes de projeto.
 
 ### 🎯 Principais Funcionalidades
 
@@ -44,8 +44,8 @@ Antes de começar, certifique-se de ter instalado:
 
 1. **Clone o repositório**
    ```bash
-   git clone https://github.com/seu-usuario/TaskManager-Frontend.git
-   cd TaskManager-Frontend
+   git clone https://github.com/seu-usuario/Obra-Facil-Frontend.git
+   cd Obra-Facil-Frontend
    ```
 
 2. **Instale as dependências**
@@ -97,7 +97,7 @@ npm run web
 ## 🏗️ Arquitetura do Projeto
 
 ```
-TaskManager/
+ObraFacil/
 ├── 📁 assets/                    # Recursos visuais
 │   ├── icon.png
 │   ├── splash-icon.png
@@ -398,6 +398,6 @@ Este projeto está sob a licença MIT. Veja o arquivo [LICENSE](LICENSE) para ma
 ---
 
 <div align="center">
-  <p><strong>TaskManager - Transformando a gestão de projetos de construção</strong></p>
+  <p><strong>Obra Fácil - Transformando a gestão de projetos de construção</strong></p>
   <p>⭐ Se este projeto foi útil para você, considere dar uma estrela!</p>
 </div> 
