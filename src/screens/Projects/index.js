@@ -16,6 +16,28 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DatePicker } from '../../components';
 
+// Controle de debug - defina como false para remover logs em produção
+const DEBUG_ENABLED = true;
+
+// Função de log condicional
+const debugLog = (...args) => {
+  if (DEBUG_ENABLED) {
+    console.log(...args);
+  }
+};
+
+const debugError = (...args) => {
+  if (DEBUG_ENABLED) {
+    console.error(...args);
+  }
+};
+
+const debugWarn = (...args) => {
+  if (DEBUG_ENABLED) {
+    console.warn(...args);
+  }
+};
+
 const Projects = ({ navigation }) => {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -23,6 +45,7 @@ const Projects = ({ navigation }) => {
   const [filteredProjects, setFilteredProjects] = useState([]);
   const [searchText, setSearchText] = useState('');
   const [selectedStatus, setSelectedStatus] = useState('TODOS');
+  const [debugInfo, setDebugInfo] = useState('');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showProjectDetails, setShowProjectDetails] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
@@ -71,54 +94,151 @@ const Projects = ({ navigation }) => {
   // Função para criar headers com autenticação
   const getAuthHeaders = async () => {
     const token = await getAuthToken();
-    return {
+    console.log('🔑 Token obtido:', token ? '✅ Existe' : '❌ Não encontrado');
+    
+    const headers = {
       'Content-Type': 'application/json',
       ...(token && { 'Authorization': `Bearer ${token}` }),
     };
+    
+    console.log('🔑 Headers criados:', { 
+      'Content-Type': headers['Content-Type'],
+      'Authorization': headers.Authorization ? '✅ Bearer [TOKEN]' : '❌ Não incluído'
+    });
+    
+    return headers;
   };
 
   // Carregar todos os projetos
   const loadProjects = async () => {
     try {
+      console.log('🔄 Iniciando carregamento de projetos...');
       const headers = await getAuthHeaders();
-      const response = await fetch(`${API_BASE}/projects`, {
-        method: 'GET',
-        headers: headers,
-      });
+      console.log('🔑 Headers preparados:', headers);
       
-      if (response.ok) {
-        const data = await response.json();
-        setProjects(Array.isArray(data) ? data : []);
-        setFilteredProjects(Array.isArray(data) ? data : []);
-      } else if (response.status === 401) {
-        Alert.alert('Erro de Autenticação', 'Sessão expirada. Faça login novamente.');
+      // Lista de endpoints para tentar (ordem de prioridade)
+      const endpoints = [
+        `${API_BASE}/projects`,
+        `${API_BASE}/projects/all`,
+        `${API_BASE}/admin/projects`
+      ];
+      
+      let projectsData = [];
+      let success = false;
+      
+      for (const endpoint of endpoints) {
+        try {
+          console.log('📡 Tentando endpoint:', endpoint);
+          const response = await fetch(endpoint, {
+            method: 'GET',
+            headers: headers,
+          });
+          
+          console.log('📡 Response status:', response.status, 'para endpoint:', endpoint);
+          
+          if (response.ok) {
+            const data = await response.json();
+            console.log('📊 Dados recebidos da API:', data);
+            console.log('📊 Tipo dos dados:', typeof data);
+            console.log('📊 É array?', Array.isArray(data));
+            
+            if (Array.isArray(data)) {
+              console.log('✅ Array de projetos recebido:', data.length, 'projetos de', endpoint);
+              if (data.length > 0 || endpoint === endpoints[0]) {
+                // Se encontrou projetos ou é o endpoint principal, usar este resultado
+                projectsData = data;
+                success = true;
+                break;
+              }
+            } else if (data && typeof data === 'object') {
+              console.log('📦 Objeto recebido, verificando propriedades...');
+              
+              // Verificar se existe uma propriedade que contém a lista
+              const possibleArrays = ['projects', 'data', 'content', 'items', 'results'];
+              let projectsArray = null;
+              
+              for (const prop of possibleArrays) {
+                if (data[prop] && Array.isArray(data[prop])) {
+                  console.log(`✅ Array encontrado em: ${prop} com ${data[prop].length} projetos`);
+                  projectsArray = data[prop];
+                  break;
+                }
+              }
+              
+              if (projectsArray) {
+                if (projectsArray.length > 0 || endpoint === endpoints[0]) {
+                  projectsData = projectsArray;
+                  success = true;
+                  break;
+                }
+              }
+            }
+          } else if (response.status === 403 || response.status === 401) {
+            console.log('🔒 Sem permissão para', endpoint, '- tentando próximo...');
+            continue;
+          } else {
+            const errorText = await response.text();
+            console.error('❌ Erro no endpoint', endpoint, ':', response.status, errorText);
+          }
+        } catch (endpointError) {
+          console.error('💥 Erro ao tentar endpoint', endpoint, ':', endpointError);
+          continue;
+        }
       }
+      
+      if (success) {
+        setProjects(projectsData);
+        setFilteredProjects(projectsData);
+        
+        if (projectsData.length === 0) {
+          console.log('📋 Nenhum projeto encontrado - isso pode ser normal se você ainda não criou projetos ou não faz parte de nenhuma equipe');
+        }
+      } else {
+        console.error('❌ Falha em todos os endpoints de projetos');
+        Alert.alert('Erro', 'Não foi possível carregar os projetos. Verifique sua conexão e permissões.');
+      }
+      
     } catch (error) {
-      console.error('Erro ao carregar projetos:', error);
-      Alert.alert('Erro', 'Não foi possível carregar os projetos.');
+      console.error('💥 Erro geral ao carregar projetos:', error);
+      Alert.alert('Erro', 'Não foi possível carregar os projetos. Erro de conexão.');
     }
   };
 
   // Carregar projetos por status
   const loadProjectsByStatus = async (status) => {
     if (status === 'TODOS') {
+      console.log('🔄 Mostrando todos os projetos:', projects.length);
       setFilteredProjects(projects);
       return;
     }
 
     try {
+      console.log('🔄 Carregando projetos por status:', status);
       const headers = await getAuthHeaders();
       const response = await fetch(`${API_BASE}/projects/status/${status}`, {
         method: 'GET',
         headers: headers,
       });
       
+      console.log('📡 Response status (por status):', response.status);
+      
       if (response.ok) {
         const data = await response.json();
-        setFilteredProjects(Array.isArray(data) ? data : []);
+        console.log('📊 Dados por status recebidos:', data);
+        
+        if (Array.isArray(data)) {
+          console.log('✅ Array de projetos por status:', data.length, 'projetos');
+          setFilteredProjects(data);
+        } else {
+          console.log('📋 Dados por status não são array, definindo como vazio');
+          setFilteredProjects([]);
+        }
+      } else {
+        const errorText = await response.text();
+        console.error('❌ Erro ao carregar por status:', response.status, errorText);
       }
     } catch (error) {
-      console.error('Erro ao carregar projetos por status:', error);
+      console.error('💥 Erro ao carregar projetos por status:', error);
     }
   };
 
@@ -145,22 +265,167 @@ const Projects = ({ navigation }) => {
     }
   };
 
-  // Carregar detalhes do projeto
+  // Função para buscar membros completos do projeto
+  const getCompleteProjectMembers = async (projectId, expectedCount = 0) => {
+    try {
+      debugLog('🔍 Buscando membros completos do projeto:', projectId, 'esperados:', expectedCount);
+      const headers = await getAuthHeaders();
+      
+      // Estratégia 1: Tentar endpoint específico de membros
+      const memberEndpoints = [
+        `${API_BASE}/projects/${projectId}/members`,
+        `${API_BASE}/projects/${projectId}/team`,
+        `${API_BASE}/projects/${projectId}/users`
+      ];
+      
+      for (const endpoint of memberEndpoints) {
+        try {
+          debugLog('📡 Tentando endpoint de membros:', endpoint);
+          const response = await fetch(endpoint, {
+            method: 'GET',
+            headers: headers,
+          });
+          
+          if (response.ok) {
+            const members = await response.json();
+            if (Array.isArray(members) && members.length >= expectedCount) {
+              debugLog('✅ Membros encontrados em', endpoint, ':', members.length);
+              return members;
+            }
+          }
+        } catch (error) {
+          debugLog('⚠️ Endpoint', endpoint, 'falhou:', error.message);
+        }
+      }
+      
+      // Estratégia 2: Se não encontrou endpoint específico, buscar na lista de todos os usuários
+      // e filtrar os que fazem parte deste projeto
+      debugLog('🔄 Estratégia 2: Buscando todos os usuários e filtrando...');
+      
+      try {
+        const usersResponse = await fetch(`${API_BASE}/users`, {
+          method: 'GET',
+          headers: headers,
+        });
+        
+        if (usersResponse.ok) {
+          const allUsers = await usersResponse.json();
+          debugLog('👥 Total de usuários no sistema:', allUsers.length);
+          
+          // Buscar histórico de adições ao projeto (se disponível)
+          // Ou usar alguma lógica para identificar membros
+          
+          // Por enquanto, vamos retornar array vazio e usar os dados que temos
+          debugLog('⚠️ Não foi possível identificar membros específicos do projeto via usuários');
+        }
+      } catch (error) {
+        debugLog('❌ Falha ao buscar usuários:', error.message);
+      }
+      
+      return [];
+    } catch (error) {
+      debugError('💥 Erro ao buscar membros completos:', error);
+      return [];
+    }
+  };
+
+  // Carregar detalhes do projeto (melhorado)
   const loadProjectDetails = async (projectId) => {
     try {
+      debugLog('🔄 Carregando detalhes do projeto:', projectId);
       const headers = await getAuthHeaders();
+      
+      // Primeiro, encontrar o projeto na lista para preservar dados corretos
+      const projectFromList = projects.find(p => p.id === projectId);
+      debugLog('📊 Dados do projeto na lista:', projectFromList);
+      
       const response = await fetch(`${API_BASE}/projects/${projectId}`, {
         method: 'GET',
         headers: headers,
       });
       
+      debugLog('📡 Response status (detalhes):', response.status);
+      
       if (response.ok) {
         const data = await response.json();
-        setSelectedProject(data);
+        
+        // Log super detalhado para debug
+        debugLog('🔍 === DEBUG DETALHADO DOS DADOS DO PROJETO ===');
+        debugLog('📊 Projeto ID:', data.id);
+        debugLog('📊 Nome do projeto:', data.name);
+        debugLog('📊 teamSize (detalhes API):', data.teamSize);
+        debugLog('📊 teamSize (lista API):', projectFromList?.teamSize);
+        debugLog('📊 teamMembers existe?', data.teamMembers ? 'SIM' : 'NÃO');
+        debugLog('📊 teamMembers é array?', Array.isArray(data.teamMembers));
+        debugLog('📊 teamMembers.length:', data.teamMembers?.length || 0);
+        debugLog('📊 teamMembers completo:', JSON.stringify(data.teamMembers, null, 2));
+        
+        // NOVA ESTRATÉGIA: Tentar buscar membros completos
+        const expectedMemberCount = Math.max(
+          projectFromList?.teamSize || 0,
+          data.teamSize || 0
+        );
+        
+        debugLog('🎯 Tentando buscar membros completos...');
+        const completeMembers = await getCompleteProjectMembers(projectId, expectedMemberCount);
+        
+        let finalMembers = data.teamMembers || [];
+        if (completeMembers.length > finalMembers.length) {
+          debugLog('✅ Encontrados mais membros! Usando lista completa.');
+          finalMembers = completeMembers;
+        } else if (expectedMemberCount > finalMembers.length) {
+          debugLog('⚠️ Ainda faltam membros. Criando placeholders...');
+          
+          // Criar placeholders para membros faltantes
+          const missingCount = expectedMemberCount - finalMembers.length;
+          for (let i = 0; i < missingCount; i++) {
+            finalMembers.push({
+              id: `missing-${i}`,
+              fullName: `Membro ${finalMembers.length + i + 1}`,
+              email: 'Carregando...',
+              phone: null,
+              hourlyRate: 0,
+              isActive: true,
+              role: 'USER',
+              isMissing: true // Flag para identificar placeholder
+            });
+          }
+          debugLog('🔧 Adicionados', missingCount, 'placeholders para membros faltantes');
+        }
+        
+        debugLog('🔍 === FIM DEBUG DETALHADO ===');
+        
+        // CORREÇÃO: Usar o maior teamSize e membros completos
+        const correctTeamSize = Math.max(
+          projectFromList?.teamSize || 0,
+          data.teamSize || 0,
+          finalMembers.length
+        );
+        
+        debugLog('🔧 CORREÇÃO APLICADA:');
+        debugLog('📊 teamSize original (detalhes):', data.teamSize);
+        debugLog('📊 teamSize da lista:', projectFromList?.teamSize);
+        debugLog('📊 teamMembers originais:', data.teamMembers?.length || 0);
+        debugLog('📊 teamMembers finais:', finalMembers.length);
+        debugLog('📊 teamSize corrigido:', correctTeamSize);
+        
+        // Usar dados corrigidos
+        const correctedData = {
+          ...data,
+          teamSize: correctTeamSize,
+          teamMembers: finalMembers
+        };
+        
+        setSelectedProject(correctedData);
         setShowProjectDetails(true);
+      } else {
+        const errorText = await response.text();
+        debugError('❌ Erro ao carregar detalhes - Status:', response.status);
+        debugError('❌ Erro ao carregar detalhes - Resposta:', errorText);
+        Alert.alert('Erro', 'Não foi possível carregar os detalhes do projeto.');
       }
     } catch (error) {
-      console.error('Erro ao carregar detalhes do projeto:', error);
+      debugError('💥 Erro ao carregar detalhes do projeto:', error);
       Alert.alert('Erro', 'Não foi possível carregar os detalhes do projeto.');
     }
   };
@@ -169,28 +434,87 @@ const Projects = ({ navigation }) => {
   const createProject = async () => {
     try {
       const headers = await getAuthHeaders();
+      
+      // Obter dados do usuário atual
+      const currentUser = await getCurrentUser();
+      let currentUserId = null;
+      let userFound = false;
+      
+      if (currentUser && currentUser.id) {
+        currentUserId = currentUser.id;
+        userFound = true;
+        console.log('👤 Usuário atual obtido:', currentUser.fullName || currentUser.email, '- ID:', currentUserId);
+      } else if (currentUser && currentUser.email) {
+        userFound = true;
+        console.log('👤 Usuário obtido (sem ID):', currentUser.email);
+        console.log('⚠️ Não foi possível obter ID do usuário - inclusão automática na equipe não será possível');
+      } else {
+        console.warn('⚠️ Não foi possível obter dados do usuário atual');
+      }
+      
+      // Incluir o usuário atual na equipe se o ID foi encontrado
+      const teamMemberIds = [...projectForm.teamMemberIds];
+      if (currentUserId && !teamMemberIds.includes(currentUserId)) {
+        teamMemberIds.push(currentUserId);
+        console.log('✅ Usuário criador adicionado à equipe automaticamente');
+      }
+      
+      const projectData = {
+        ...projectForm,
+        totalBudget: parseFloat(projectForm.totalBudget) || 0,
+        teamMemberIds: teamMemberIds
+      };
+      
+      console.log('📝 Dados do projeto a ser criado:', { 
+        ...projectData, 
+        teamMemberIds: teamMemberIds 
+      });
+      
+      console.log('📡 Enviando requisição de criação...');
       const response = await fetch(`${API_BASE}/projects`, {
         method: 'POST',
         headers: headers,
-        body: JSON.stringify({
-          ...projectForm,
-          totalBudget: parseFloat(projectForm.totalBudget) || 0
-        }),
+        body: JSON.stringify(projectData),
       });
       
+      console.log('📡 Response status (criação):', response.status);
+      
       if (response.ok) {
-        Alert.alert('Sucesso', 'Projeto criado com sucesso!');
+        const createdProject = await response.json();
+        console.log('✅ Projeto criado com sucesso:', createdProject);
+        
+        let successMessage = 'Projeto criado com sucesso!';
+        if (currentUserId) {
+          successMessage = 'Projeto criado com sucesso! Você foi automaticamente adicionado à equipe.';
+        } else if (userFound) {
+          successMessage = 'Projeto criado com sucesso! Para ser adicionado à equipe, peça a um administrador.';
+        }
+        Alert.alert('Sucesso', successMessage);
         setShowCreateModal(false);
         resetForm();
         loadProjects();
       } else {
-        Alert.alert('Erro', 'Falha ao criar projeto.');
+        const errorText = await response.text();
+        console.error('❌ Erro ao criar projeto - Status:', response.status);
+        console.error('❌ Erro ao criar projeto - Resposta:', errorText);
+        
+        let errorMessage = 'Falha ao criar projeto';
+        try {
+          const errorResult = JSON.parse(errorText);
+          errorMessage = errorResult.message || errorResult.mensagem || errorMessage;
+        } catch (e) {
+          errorMessage = errorText || errorMessage;
+        }
+        
+        Alert.alert('Erro', `${errorMessage} (Status: ${response.status})`);
       }
     } catch (error) {
       console.error('Erro ao criar projeto:', error);
       Alert.alert('Erro', 'Erro de conexão.');
     }
   };
+
+
 
   // Editar projeto
   const editProject = async () => {
@@ -257,39 +581,113 @@ const Projects = ({ navigation }) => {
   // Carregar usuários disponíveis
   const loadAvailableUsers = async () => {
     try {
+      debugLog('🔄 Carregando usuários disponíveis...');
       const headers = await getAuthHeaders();
-      const response = await fetch(`${API_BASE}/users`, {
-        method: 'GET',
-        headers: headers,
-      });
       
-      if (response.ok) {
-        const data = await response.json();
-        setAvailableUsers(Array.isArray(data) ? data : []);
+      // Tentar diferentes endpoints para obter usuários
+      const endpoints = [
+        `${API_BASE}/users/active`,
+        `${API_BASE}/users`
+      ];
+      
+      let usersData = [];
+      let success = false;
+      
+      for (const endpoint of endpoints) {
+        try {
+          debugLog('📡 Tentando endpoint de usuários:', endpoint);
+          const response = await fetch(endpoint, {
+            method: 'GET',
+            headers: headers,
+          });
+          
+          if (response.ok) {
+            const data = await response.json();
+            debugLog('👥 Usuários carregados de', endpoint, ':', data.length);
+            
+            if (Array.isArray(data)) {
+              usersData = data;
+              success = true;
+              break;
+            }
+          } else if (response.status === 403 || response.status === 401) {
+            debugLog('🔒 Sem permissão para', endpoint, '- tentando próximo...');
+            continue;
+          } else {
+            debugWarn('⚠️ Falha ao carregar usuários de', endpoint, '- Status:', response.status);
+          }
+        } catch (endpointError) {
+          debugError('Erro ao tentar endpoint', endpoint, ':', endpointError);
+          continue;
+        }
+      }
+      
+      if (success) {
+        // Filtrar usuários que já estão na equipe do projeto
+        const currentTeamIds = selectedProject.teamMembers?.map(member => member.id) || [];
+        const availableUsers = usersData.filter(user => !currentTeamIds.includes(user.id));
+        
+        debugLog('📊 Usuários disponíveis (após filtro):', availableUsers.length);
+        debugLog('🚫 Usuários já na equipe:', currentTeamIds.length);
+        
+        setAvailableUsers(availableUsers);
+      } else {
+        debugError('❌ Falha em todos os endpoints de usuários');
+        setAvailableUsers([]);
       }
     } catch (error) {
-      console.error('Erro ao carregar usuários:', error);
+      debugError('💥 Erro ao carregar usuários:', error);
+      setAvailableUsers([]);
     }
   };
 
   // Adicionar membro ao projeto
   const addMemberToProject = async (userId) => {
     try {
+      debugLog('🔄 Adicionando membro ao projeto:', selectedProject.id, 'userId:', userId);
       const headers = await getAuthHeaders();
+      
       const response = await fetch(`${API_BASE}/projects/${selectedProject.id}/team/${userId}`, {
         method: 'POST',
         headers: headers,
       });
       
+      debugLog('📡 Response status (adicionar membro):', response.status);
+      
       if (response.ok) {
+        const responseData = await response.json();
+        debugLog('✅ Membro adicionado com sucesso:', responseData);
+        
         Alert.alert('Sucesso', 'Membro adicionado ao projeto!');
         setShowAddMemberModal(false);
-        loadProjectDetails(selectedProject.id);
+        
+        // IMPORTANTE: Primeiro recarregar a lista, depois os detalhes
+        debugLog('🔄 Recarregando lista de projetos primeiro...');
+        await loadProjects();
+        
+        // Aguardar um pouco para garantir que a lista foi atualizada
+        setTimeout(async () => {
+          debugLog('🔄 Agora recarregando detalhes do projeto...');
+          await loadProjectDetails(selectedProject.id);
+        }, 500);
+        
       } else {
-        Alert.alert('Erro', 'Falha ao adicionar membro.');
+        const errorText = await response.text();
+        debugError('❌ Erro ao adicionar membro - Status:', response.status);
+        debugError('❌ Erro ao adicionar membro - Resposta:', errorText);
+        
+        let errorMessage = 'Falha ao adicionar membro';
+        try {
+          const errorData = JSON.parse(errorText);
+          errorMessage = errorData.mensagem || errorData.message || errorMessage;
+        } catch (e) {
+          errorMessage = errorText || errorMessage;
+        }
+        
+        Alert.alert('Erro', errorMessage);
       }
     } catch (error) {
-      console.error('Erro ao adicionar membro:', error);
+      debugError('💥 Erro ao adicionar membro:', error);
       Alert.alert('Erro', 'Erro de conexão.');
     }
   };
@@ -306,20 +704,43 @@ const Projects = ({ navigation }) => {
           style: 'destructive',
           onPress: async () => {
             try {
+              debugLog('🔄 Removendo membro do projeto:', selectedProject.id, 'userId:', userId);
               const headers = await getAuthHeaders();
+              
               const response = await fetch(`${API_BASE}/projects/${selectedProject.id}/team/${userId}`, {
                 method: 'DELETE',
                 headers: headers,
               });
               
+              debugLog('📡 Response status (remover membro):', response.status);
+              
               if (response.ok) {
+                debugLog('✅ Membro removido com sucesso');
                 Alert.alert('Sucesso', 'Membro removido do projeto!');
-                loadProjectDetails(selectedProject.id);
+                
+                // Recarregar detalhes do projeto para atualizar a interface
+                debugLog('🔄 Recarregando detalhes do projeto...');
+                await loadProjectDetails(selectedProject.id);
+                
+                // Também recarregar a lista de projetos para manter consistência
+                await loadProjects();
               } else {
-                Alert.alert('Erro', 'Falha ao remover membro.');
+                const errorText = await response.text();
+                debugError('❌ Erro ao remover membro - Status:', response.status);
+                debugError('❌ Erro ao remover membro - Resposta:', errorText);
+                
+                let errorMessage = 'Falha ao remover membro';
+                try {
+                  const errorData = JSON.parse(errorText);
+                  errorMessage = errorData.mensagem || errorData.message || errorMessage;
+                } catch (e) {
+                  errorMessage = errorText || errorMessage;
+                }
+                
+                Alert.alert('Erro', errorMessage);
               }
             } catch (error) {
-              console.error('Erro ao remover membro:', error);
+              debugError('💥 Erro ao remover membro:', error);
               Alert.alert('Erro', 'Erro de conexão.');
             }
           }
@@ -363,26 +784,32 @@ const Projects = ({ navigation }) => {
 
   // Carregar dados iniciais
   const loadInitialData = async () => {
+    console.log('🚀 Iniciando carregamento inicial de dados...');
     setLoading(true);
     await loadProjects();
     setLoading(false);
+    console.log('✅ Carregamento inicial concluído');
   };
 
   // Refresh dos dados
   const onRefresh = async () => {
+    console.log('🔄 Iniciando refresh...');
     setRefreshing(true);
     await loadProjects();
     setRefreshing(false);
+    console.log('✅ Refresh concluído');
   };
 
   // Filtrar por status
   const handleStatusFilter = (status) => {
+    console.log('🔍 Filtrando por status:', status);
     setSelectedStatus(status);
     loadProjectsByStatus(status);
   };
 
   // Buscar projetos
   const handleSearch = (text) => {
+    console.log('🔍 Buscando projetos:', text);
     setSearchText(text);
     if (text.length > 2) {
       searchProjects(text);
@@ -392,6 +819,7 @@ const Projects = ({ navigation }) => {
   };
 
   useEffect(() => {
+    console.log('🎯 useEffect executado - iniciando carregamento...');
     loadInitialData();
   }, []);
 
@@ -415,11 +843,135 @@ const Projects = ({ navigation }) => {
     return statusObj ? statusObj.color : '#6c757d';
   };
 
+  // Função para obter usuário atual (simplificada)
+  const getCurrentUser = async () => {
+    try {
+      // Tentar obter do AsyncStorage primeiro
+      const userData = await AsyncStorage.getItem('userData');
+      if (userData) {
+        try {
+          const parsedData = JSON.parse(userData);
+          debugLog('👤 Usuário obtido do storage:', parsedData.fullName || parsedData.email);
+          if (parsedData.id) {
+            return parsedData;
+          }
+        } catch (parseError) {
+          debugError('Erro ao parsear dados do usuário do storage:', parseError);
+        }
+      }
+      
+      // Como os endpoints de perfil estão com erro 500, vamos tentar extrair dados do token
+      const token = await getAuthToken();
+      let userEmail = null;
+      if (token) {
+        try {
+          // Decodificar o payload do JWT (parte do meio)
+          const payload = token.split('.')[1];
+          const decodedPayload = JSON.parse(atob(payload));
+          debugLog('👤 Dados extraídos do token:', decodedPayload);
+          
+          // Se temos o email do token, podemos usar isso
+          if (decodedPayload.sub) {
+            userEmail = decodedPayload.sub;
+          }
+        } catch (tokenError) {
+          debugError('Erro ao decodificar token:', tokenError);
+        }
+      }
+
+      // Se temos o email, vamos tentar buscar o usuário usando os novos endpoints
+      if (userEmail) {
+        try {
+          debugLog('🔍 Tentando buscar usuário pelo email usando múltiplos endpoints...', userEmail);
+          const headers = await getAuthHeaders();
+          
+          // Lista de endpoints para tentar buscar usuários
+          const userEndpoints = [
+            `${API_BASE}/users/active`,  // Usuários ativos
+            `${API_BASE}/users`          // Todos os usuários
+          ];
+          
+          for (const endpoint of userEndpoints) {
+            try {
+              debugLog('📡 Tentando endpoint de usuários:', endpoint);
+              const response = await fetch(endpoint, {
+                method: 'GET',
+                headers: headers,
+              });
+              
+              if (response.ok) {
+                const users = await response.json();
+                debugLog('👥 Lista de usuários obtida de', endpoint, ':', users.length, 'usuários');
+                
+                if (Array.isArray(users)) {
+                  const currentUser = users.find(user => user.email === userEmail);
+                  if (currentUser) {
+                    debugLog('✅ Usuário encontrado na lista:', currentUser.fullName || currentUser.email, '- ID:', currentUser.id);
+                    
+                    // Salvar no AsyncStorage para uso futuro
+                    try {
+                      await AsyncStorage.setItem('userData', JSON.stringify(currentUser));
+                      debugLog('💾 Dados do usuário salvos no storage');
+                    } catch (saveError) {
+                      debugError('Erro ao salvar dados do usuário:', saveError);
+                    }
+                    
+                    return currentUser;
+                  }
+                } else if (users && typeof users === 'object') {
+                  // Se retornar um objeto, verificar se é um usuário específico
+                  if (users.email === userEmail) {
+                    debugLog('✅ Usuário encontrado como objeto:', users.fullName || users.email, '- ID:', users.id);
+                    
+                    try {
+                      await AsyncStorage.setItem('userData', JSON.stringify(users));
+                      debugLog('💾 Dados do usuário salvos no storage');
+                    } catch (saveError) {
+                      debugError('Erro ao salvar dados do usuário:', saveError);
+                    }
+                    
+                    return users;
+                  }
+                }
+              } else if (response.status === 403 || response.status === 401) {
+                debugLog('🔒 Sem permissão para', endpoint, '- tentando próximo...');
+                continue;
+              } else {
+                debugWarn('⚠️ Falha ao obter usuários de', endpoint, '- Status:', response.status);
+              }
+            } catch (endpointError) {
+              debugError('Erro ao tentar endpoint', endpoint, ':', endpointError);
+              continue;
+            }
+          }
+          
+          debugWarn('⚠️ Usuário não encontrado em nenhum endpoint');
+        } catch (apiError) {
+          debugError('Erro ao buscar usuário na API:', apiError);
+        }
+
+        // Se não conseguiu encontrar na API, retorna pelo menos o email
+        return {
+          email: userEmail,
+          // Note: não temos o ID do usuário
+        };
+      }
+      
+      debugWarn('⚠️ Não foi possível obter dados do usuário atual');
+      return null;
+    } catch (error) {
+      debugError('Erro ao obter usuário atual:', error);
+      return null;
+    }
+  };
+
   // Função para obter label do status
   const getStatusLabel = (status) => {
     const statusObj = projectStatuses.find(s => s.key === status);
     return statusObj ? statusObj.label : status;
   };
+
+
 
   if (loading) {
     return (
@@ -467,26 +1019,7 @@ const Projects = ({ navigation }) => {
         </View>
       </View>
 
-      <View style={styles.progressContainer}>
-        <View style={styles.progressHeader}>
-          <Text style={styles.progressLabel}>Progresso</Text>
-          <Text style={styles.progressPercentage}>{item.progressPercentage}%</Text>
-        </View>
-        <View style={styles.progressBar}>
-          <View 
-            style={[
-              styles.progressFill, 
-              { 
-                width: `${item.progressPercentage}%`,
-                backgroundColor: item.isDelayed ? '#dc3545' : '#28a745'
-              }
-            ]} 
-          />
-        </View>
-        {item.isDelayed && (
-          <Text style={styles.delayedText}>⚠️ Projeto atrasado</Text>
-        )}
-      </View>
+      
     </TouchableOpacity>
   );
 
@@ -550,7 +1083,10 @@ const Projects = ({ navigation }) => {
         ))}
       </ScrollView>
 
+
+
       {/* Lista de Projetos */}
+      {console.log('🔍 Renderizando lista - filteredProjects:', filteredProjects.length, 'projetos')}
       <FlatList
         data={filteredProjects}
         renderItem={renderProject}
@@ -566,6 +1102,7 @@ const Projects = ({ navigation }) => {
             <Text style={styles.emptySubtext}>
               Crie seu primeiro projeto ou ajuste os filtros
             </Text>
+            {console.log('📋 ListEmptyComponent sendo exibido - projetos filtrados:', filteredProjects.length)}
           </View>
         }
       />
@@ -688,6 +1225,14 @@ const Projects = ({ navigation }) => {
                 ))}
               </View>
             </View>
+
+            {/* Informação sobre inclusão automática */}
+            <View style={styles.infoBox}>
+              <Ionicons name="information-circle" size={16} color="#007AFF" />
+              <Text style={styles.infoText}>
+                Você será automaticamente adicionado à equipe deste projeto como criador.
+              </Text>
+            </View>
           </ScrollView>
         </View>
       </Modal>
@@ -779,35 +1324,13 @@ const Projects = ({ navigation }) => {
                 )}
               </View>
 
-              <View style={styles.detailsSection}>
-                <Text style={styles.sectionTitle}>Progresso</Text>
-                <View style={styles.progressContainer}>
-                  <View style={styles.progressHeader}>
-                    <Text style={styles.progressLabel}>Conclusão do Projeto</Text>
-                    <Text style={styles.progressPercentage}>{selectedProject.progressPercentage}%</Text>
-                  </View>
-                  <View style={styles.progressBar}>
-                    <View 
-                      style={[
-                        styles.progressFill, 
-                        { 
-                          width: `${selectedProject.progressPercentage}%`,
-                          backgroundColor: selectedProject.isDelayed ? '#dc3545' : '#28a745'
-                        }
-                      ]} 
-                    />
-                  </View>
-                  {selectedProject.isDelayed && (
-                    <Text style={styles.delayedText}>⚠️ Projeto atrasado</Text>
-                  )}
-                </View>
-              </View>
+
 
               {/* Seção de Tarefas */}
               <View style={styles.detailsSection}>
                 <View style={styles.tasksHeader}>
                   <Text style={styles.sectionTitle}>Tarefas do Projeto</Text>
-                  <TouchableOpacity 
+                                    <TouchableOpacity 
                     style={styles.viewTasksButton}
                     onPress={() => {
                       setShowProjectDetails(false);
@@ -827,7 +1350,9 @@ const Projects = ({ navigation }) => {
 
               <View style={styles.detailsSection}>
                 <View style={styles.teamHeader}>
-                  <Text style={styles.sectionTitle}>Equipe ({selectedProject.teamSize} membros)</Text>
+                  <Text style={styles.sectionTitle}>
+                    Equipe ({selectedProject.teamSize || selectedProject.teamMembers?.length || 0} membros)
+                  </Text>
                   <TouchableOpacity 
                     style={styles.addMemberButton}
                     onPress={() => {
@@ -840,22 +1365,57 @@ const Projects = ({ navigation }) => {
                   </TouchableOpacity>
                 </View>
                 {selectedProject.teamMembers && selectedProject.teamMembers.map((member) => (
-                  <View key={member.id} style={styles.teamMember}>
+                  <View 
+                    key={member.id} 
+                    style={[
+                      styles.teamMember,
+                      member.isMissing && styles.teamMemberMissing
+                    ]}
+                  >
                     <View style={styles.memberInfo}>
-                      <Text style={styles.memberName}>{member.fullName}</Text>
-                      <Text style={styles.memberEmail}>{member.email}</Text>
-                      <Text style={styles.memberPhone}>{member.phone}</Text>
+                      <View style={styles.memberNameRow}>
+                        <Text style={[
+                          styles.memberName,
+                          member.isMissing && styles.memberNameMissing
+                        ]}>
+                          {member.fullName}
+                        </Text>
+                        {member.isMissing && (
+                          <View style={styles.missingBadge}>
+                            <Text style={styles.missingBadgeText}>Carregando...</Text>
+                          </View>
+                        )}
+                      </View>
+                      <Text style={[
+                        styles.memberEmail,
+                        member.isMissing && styles.memberEmailMissing
+                      ]}>
+                        {member.email}
+                      </Text>
+                      {member.phone && (
+                        <Text style={styles.memberPhone}>{member.phone}</Text>
+                      )}
                     </View>
                     <View style={styles.memberActions}>
                       <Text style={styles.memberRate}>
-                        {formatCurrency(member.hourlyRate)}/h
+                        {formatCurrency(member.hourlyRate || 0)}/h
                       </Text>
-                      <TouchableOpacity 
-                        style={styles.removeMemberButton}
-                        onPress={() => removeMemberFromProject(member.id)}
-                      >
-                        <Ionicons name="person-remove-outline" size={16} color="#dc3545" />
-                      </TouchableOpacity>
+                      {!member.isMissing && (
+                        <TouchableOpacity 
+                          style={styles.removeMemberButton}
+                          onPress={() => removeMemberFromProject(member.id)}
+                        >
+                          <Ionicons name="person-remove-outline" size={16} color="#dc3545" />
+                        </TouchableOpacity>
+                      )}
+                      {member.isMissing && (
+                        <TouchableOpacity 
+                          style={styles.refreshMemberButton}
+                          onPress={() => loadProjectDetails(selectedProject.id)}
+                        >
+                          <Ionicons name="refresh-outline" size={16} color="#007AFF" />
+                        </TouchableOpacity>
+                      )}
                     </View>
                   </View>
                 ))}
@@ -1501,6 +2061,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 12,
   },
+
   viewTasksButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1517,6 +2078,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginLeft: 4,
   },
+
   tasksPreview: {
     padding: 16,
     backgroundColor: '#fff',
@@ -1527,6 +2089,72 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#666',
     textAlign: 'center',
+  },
+  infoBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: '#e3f2fd',
+    padding: 12,
+    borderRadius: 8,
+    borderLeftWidth: 4,
+    borderLeftColor: '#007AFF',
+    marginTop: 16,
+  },
+  infoText: {
+    fontSize: 14,
+    color: '#1565c0',
+    marginLeft: 8,
+    flex: 1,
+    lineHeight: 20,
+  },
+  debugContainer: {
+    backgroundColor: '#f0f0f0',
+    padding: 8,
+    margin: 8,
+    borderRadius: 4,
+    borderLeftWidth: 4,
+    borderLeftColor: '#ff9800',
+  },
+  debugText: {
+    fontSize: 12,
+    color: '#333',
+    fontFamily: 'monospace',
+  },
+  // Estilos para membros faltantes/placeholders
+  teamMemberMissing: {
+    backgroundColor: '#fff9c4',
+    borderLeftWidth: 3,
+    borderLeftColor: '#ffc107',
+  },
+  memberNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  memberNameMissing: {
+    color: '#856404',
+    fontStyle: 'italic',
+  },
+  memberEmailMissing: {
+    color: '#856404',
+    fontStyle: 'italic',
+  },
+  missingBadge: {
+    backgroundColor: '#ffc107',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 10,
+    marginLeft: 8,
+  },
+  missingBadgeText: {
+    fontSize: 10,
+    color: '#fff',
+    fontWeight: '600',
+  },
+  refreshMemberButton: {
+    padding: 4,
+    backgroundColor: '#e3f2fd',
+    borderRadius: 12,
   },
 });
 

@@ -130,21 +130,111 @@ const Tasks = ({ navigation, route }) => {
     }
   };
 
-  // Carregar usuários disponíveis
+  // Carregar usuários disponíveis (apenas membros da equipe do projeto)
   const loadAvailableUsers = async () => {
     try {
+      if (!selectedProject) {
+        console.log('⚠️ Nenhum projeto selecionado para carregar usuários');
+        setAvailableUsers([]);
+        return;
+      }
+
+      console.log('🔄 Carregando membros da equipe do projeto:', selectedProject.name);
       const headers = await getAuthHeaders();
-      const response = await fetch(`${API_BASE}/users`, {
-        method: 'GET',
-        headers: headers,
-      });
       
-      if (response.ok) {
-        const data = await response.json();
-        setAvailableUsers(Array.isArray(data) ? data : []);
+      // Tentar obter membros da equipe usando o endpoint correto
+      console.log('🔍 Tentando endpoint de membros da equipe...');
+      
+      // Tentar múltiplos endpoints para obter membros completos
+      const memberEndpoints = [
+        `${API_BASE}/projects/${selectedProject.id}/team`,
+        `${API_BASE}/projects/${selectedProject.id}/members`,
+        `${API_BASE}/projects/${selectedProject.id}`
+      ];
+      
+      let projectData = null;
+      let membersFound = false;
+      
+      for (const endpoint of memberEndpoints) {
+        try {
+          console.log('📡 Tentando endpoint de membros:', endpoint);
+          const response = await fetch(endpoint, {
+            method: 'GET',
+            headers: headers,
+          });
+          
+          if (response.ok) {
+            const data = await response.json();
+            
+            // Se for o endpoint /team ou /members, os dados são diretamente os membros
+            if (endpoint.includes('/team') || endpoint.includes('/members')) {
+              if (Array.isArray(data) && data.length > 0) {
+                console.log('✅ Membros encontrados em', endpoint, ':', data.length);
+                projectData = { teamMembers: data };
+                membersFound = true;
+                break;
+              }
+            } 
+            // Se for o endpoint do projeto, verificar se tem teamMembers
+            else if (data.teamMembers && Array.isArray(data.teamMembers)) {
+              console.log('📊 Membros encontrados no projeto via', endpoint, ':', data.teamMembers.length);
+              projectData = data;
+              membersFound = true;
+              // Não quebrar aqui, continuar tentando os endpoints específicos de membros
+            }
+          } else {
+            console.log('⚠️ Falha no endpoint', endpoint, '- Status:', response.status);
+          }
+        } catch (err) {
+          console.log('❌ Erro no endpoint', endpoint, ':', err.message);
+        }
+      }
+      
+      if (membersFound && projectData) {
+        console.log('📊 Total de membros encontrados:', projectData.teamMembers?.length || 0);
+        
+        if (projectData.teamMembers && Array.isArray(projectData.teamMembers)) {
+          console.log('🔍 Analisando todos os membros encontrados:');
+          projectData.teamMembers.forEach((member, index) => {
+            console.log(`👤 Membro ${index + 1}:`, {
+              id: member?.id,
+              fullName: member?.fullName,
+              email: member?.email,
+              isActive: member?.isActive,
+              isMissing: member?.isMissing
+            });
+          });
+          
+          // Filtro mais permissivo - apenas requer ID e nome
+          const validMembers = projectData.teamMembers.filter(member => 
+            member && 
+            member.id && 
+            (member.fullName || member.name || member.email)
+          );
+          
+          console.log('✅ Membros válidos para atribuição:', validMembers.length);
+          console.log('👥 Lista de membros válidos:', validMembers.map(m => m.fullName || m.name || m.email).join(', '));
+          
+          // Se ainda não encontrou todos, mostrar todos os membros que têm pelo menos um ID
+          if (validMembers.length < projectData.teamMembers.length) {
+            console.log('⚠️ Alguns membros foram filtrados. Tentando filtro ainda mais permissivo...');
+            const allMembersWithId = projectData.teamMembers.filter(member => member && member.id);
+            console.log('🔧 Membros com ID:', allMembersWithId.length);
+            setAvailableUsers(allMembersWithId);
+          } else {
+            setAvailableUsers(validMembers);
+          }
+        } else {
+          console.log('⚠️ Nenhum membro encontrado na equipe do projeto');
+          setAvailableUsers([]);
+        }
+      } else {
+        console.error('❌ Nenhum endpoint de membros funcionou');
+        setAvailableUsers([]);
       }
     } catch (error) {
-      console.error('Erro ao carregar usuários:', error);
+      console.error('💥 Erro ao carregar usuários da equipe:', error);
+      setAvailableUsers([]);
     }
   };
 
@@ -155,32 +245,122 @@ const Tasks = ({ navigation, route }) => {
       return;
     }
 
+    console.log('🔄 Iniciando criação de tarefa...');
+    console.log('📋 Dados do formulário:', taskForm);
+    console.log('🎯 Projeto selecionado:', selectedProject.name, '- ID:', selectedProject.id);
+
+    // Validações básicas
+    if (!taskForm.title.trim()) {
+      Alert.alert('Erro', 'O título da tarefa é obrigatório.');
+      return;
+    }
+
     try {
       const headers = await getAuthHeaders();
-      const response = await fetch(`${API_BASE}/projects/${selectedProject.id}/tasks`, {
-        method: 'POST',
-        headers: headers,
-        body: JSON.stringify({
-          ...taskForm,
-          progressPercentage: parseInt(taskForm.progressPercentage) || 0,
-          priority: parseInt(taskForm.priority) || 1,
-          estimatedHours: parseFloat(taskForm.estimatedHours) || 0,
-          actualHours: parseFloat(taskForm.actualHours) || 0,
-          assignedUserId: taskForm.assignedUserId || null
-        }),
-      });
+      console.log('🔑 Headers preparados');
+
+      // Preparar dados com validações e formatação
+      const taskData = {
+        title: taskForm.title.trim(),
+        description: taskForm.description.trim() || null,
+        status: taskForm.status || 'A_FAZER',
+        startDatePlanned: taskForm.startDatePlanned || null,
+        endDatePlanned: taskForm.endDatePlanned || null,
+        startDateActual: taskForm.startDateActual || null,
+        endDateActual: taskForm.endDateActual || null,
+        progressPercentage: Math.min(Math.max(parseInt(taskForm.progressPercentage) || 0, 0), 100),
+        priority: Math.min(Math.max(parseInt(taskForm.priority) || 1, 1), 4),
+        estimatedHours: Math.max(parseFloat(taskForm.estimatedHours) || 0, 0),
+        actualHours: Math.max(parseFloat(taskForm.actualHours) || 0, 0),
+        notes: taskForm.notes.trim() || null,
+        assignedUserId: taskForm.assignedUserId || null
+      };
+
+      console.log('📤 Dados que serão enviados:', taskData);
+      
+      // Tentar diferentes endpoints para criação de tarefas
+      const possibleEndpoints = [
+        `${API_BASE}/projects/${selectedProject.id}/tasks`,
+        `${API_BASE}/tasks`,
+        `${API_BASE}/tasks/project/${selectedProject.id}`
+      ];
+      
+      let response = null;
+      let usedEndpoint = '';
+      
+      for (const endpoint of possibleEndpoints) {
+        try {
+          console.log('🌐 Tentando endpoint:', endpoint);
+          
+          // Para o endpoint /tasks, precisamos incluir o projectId no body
+          const requestData = endpoint.includes('/tasks') && !endpoint.includes('/projects/') 
+            ? { ...taskData, projectId: selectedProject.id }
+            : taskData;
+            
+          console.log('📤 Dados ajustados para', endpoint, ':', requestData);
+          
+          response = await fetch(endpoint, {
+            method: 'POST',
+            headers: headers,
+            body: JSON.stringify(requestData),
+          });
+          
+          console.log('📡 Status da resposta para', endpoint, ':', response.status);
+          
+          if (response.ok) {
+            usedEndpoint = endpoint;
+            console.log('✅ Endpoint funcionou:', endpoint);
+            break;
+          } else {
+            const errorText = await response.text();
+            console.log('❌ Endpoint', endpoint, 'falhou:', response.status, errorText);
+          }
+        } catch (endpointError) {
+          console.log('❌ Erro no endpoint', endpoint, ':', endpointError.message);
+        }
+      }
+      
+             if (!response) {
+        console.error('❌ Nenhum endpoint funcionou');
+        Alert.alert('Erro', 'Não foi possível criar a tarefa. Todos os endpoints falharam.');
+        return;
+      }
+      
+      console.log('📡 Status final da resposta:', response.status);
       
       if (response.ok) {
+        const responseData = await response.json();
+        console.log('✅ Tarefa criada com sucesso via', usedEndpoint, ':', responseData);
         Alert.alert('Sucesso', 'Tarefa criada com sucesso!');
         setShowCreateModal(false);
         resetForm();
-        loadKanbanData(selectedProject.id);
+        await loadKanbanData(selectedProject.id);
       } else {
-        Alert.alert('Erro', 'Falha ao criar tarefa.');
+        const errorText = await response.text();
+        console.error('❌ Erro na criação da tarefa:', response.status, errorText);
+        
+        let errorMessage = 'Falha ao criar tarefa.';
+        try {
+          const errorData = JSON.parse(errorText);
+          if (errorData.mensagem) {
+            errorMessage = errorData.mensagem;
+          } else if (errorData.message) {
+            errorMessage = errorData.message;
+          } else if (errorData.error) {
+            errorMessage = errorData.error;
+          }
+        } catch (e) {
+          // Se não conseguir parsear o JSON, usa a mensagem de erro como texto
+          if (errorText && errorText.length < 200) {
+            errorMessage = errorText;
+          }
+        }
+        
+        Alert.alert('Erro', `${errorMessage} (Status: ${response.status})`);
       }
     } catch (error) {
-      console.error('Erro ao criar tarefa:', error);
-      Alert.alert('Erro', 'Erro de conexão.');
+      console.error('❌ Erro ao criar tarefa:', error);
+      Alert.alert('Erro', `Erro de conexão: ${error.message}`);
     }
   };
 
@@ -211,7 +391,7 @@ const Tasks = ({ navigation, route }) => {
         setShowEditModal(false);
         setSelectedTask(null);
         resetForm();
-        loadKanbanData(selectedProject.id);
+        await loadKanbanData(selectedProject.id);
       } else {
         Alert.alert('Erro', 'Falha ao atualizar tarefa.');
       }
@@ -235,7 +415,19 @@ const Tasks = ({ navigation, route }) => {
       });
       
       if (response.ok) {
-        loadKanbanData(selectedProject.id);
+        console.log('✅ Status da tarefa atualizado para:', newStatus);
+        
+        // Recarregar o Kanban
+        await loadKanbanData(selectedProject.id);
+        
+        // Mostrar mensagem de sucesso simples
+        if (newStatus === 'CONCLUIDA') {
+          Alert.alert(
+            'Tarefa Concluída! 🎉', 
+            'Tarefa movida para concluída com sucesso.',
+            [{ text: 'OK' }]
+          );
+        }
       }
     } catch (error) {
       console.error('Erro ao atualizar status:', error);
@@ -298,7 +490,7 @@ const Tasks = ({ navigation, route }) => {
               
               if (response.ok) {
                 Alert.alert('Sucesso', 'Tarefa excluída com sucesso!');
-                loadKanbanData(selectedProject.id);
+                await loadKanbanData(selectedProject.id);
               }
             } catch (error) {
               console.error('Erro ao excluir tarefa:', error);
@@ -329,23 +521,38 @@ const Tasks = ({ navigation, route }) => {
   };
 
   // Selecionar projeto
-  const selectProject = (project) => {
+  const selectProject = async (project) => {
+    console.log('🎯 Projeto selecionado:', project.name);
     setSelectedProject(project);
-    loadKanbanData(project.id);
+    
+    // Carregar dados do projeto
+    await loadKanbanData(project.id);
+    
+    // Carregar membros da equipe para atribuição de tarefas
+    console.log('👥 Carregando membros da equipe para atribuição...');
+    // Aguardar um pouco para garantir que selectedProject foi atualizado
+    setTimeout(() => {
+      loadAvailableUsers();
+    }, 100);
   };
 
   useEffect(() => {
     const loadInitialData = async () => {
       setLoading(true);
       await loadProjects();
-      await loadAvailableUsers();
       
       // Se há um projeto pré-selecionado, carregá-lo
       if (selectedProjectId && projects.length > 0) {
         const project = projects.find(p => p.id === selectedProjectId);
         if (project) {
+          console.log('🎯 Carregando projeto pré-selecionado:', project.name);
           setSelectedProject(project);
           await loadKanbanData(project.id);
+          
+          // Aguardar um pouco para garantir que selectedProject foi atualizado
+          setTimeout(() => {
+            loadAvailableUsers();
+          }, 200);
         }
       }
       
@@ -359,8 +566,14 @@ const Tasks = ({ navigation, route }) => {
     if (selectedProjectId && projects.length > 0 && !selectedProject) {
       const project = projects.find(p => p.id === selectedProjectId);
       if (project) {
+        console.log('🎯 Selecionando projeto após carregamento da lista:', project.name);
         setSelectedProject(project);
         loadKanbanData(project.id);
+        
+        // Carregar usuários da equipe após selecionar projeto
+        setTimeout(() => {
+          loadAvailableUsers();
+        }, 200);
       }
     }
   }, [projects, selectedProjectId]);
@@ -425,7 +638,6 @@ const Tasks = ({ navigation, route }) => {
               <Text style={styles.projectClient}>Cliente: {project.client}</Text>
               <View style={styles.projectInfo}>
                 <Text style={styles.projectTeam}>{project.teamSize} membros</Text>
-                <Text style={styles.projectProgress}>{project.progressPercentage}% concluído</Text>
               </View>
             </TouchableOpacity>
           ))}
@@ -708,7 +920,16 @@ const Tasks = ({ navigation, route }) => {
             </View>
 
             <View style={styles.formGroup}>
-              <Text style={styles.formLabel}>Atribuir a</Text>
+              <View style={styles.assignmentHeader}>
+                <Text style={styles.formLabel}>Atribuir a</Text>
+                <Text style={styles.assignmentSubtitle}>
+                  {availableUsers.length === 0 
+                    ? 'Nenhum membro na equipe' 
+                    : `${availableUsers.length} membro(s) da equipe`
+                  }
+                </Text>
+              </View>
+              
               <View style={styles.userSelector}>
                 <TouchableOpacity
                   style={[
@@ -724,23 +945,39 @@ const Tasks = ({ navigation, route }) => {
                     Não atribuído
                   </Text>
                 </TouchableOpacity>
-                {availableUsers.map((user) => (
-                  <TouchableOpacity
-                    key={user.id}
-                    style={[
-                      styles.userOption,
-                      { backgroundColor: taskForm.assignedUserId === user.id ? '#007AFF' : '#f8f9fa' }
-                    ]}
-                    onPress={() => setTaskForm({...taskForm, assignedUserId: user.id})}
-                  >
-                    <Text style={[
-                      styles.userOptionText,
-                      { color: taskForm.assignedUserId === user.id ? '#fff' : '#007AFF' }
-                    ]}>
-                      {user.fullName}
+                
+                {availableUsers.length === 0 ? (
+                  <View style={styles.noUsersContainer}>
+                    <Text style={styles.noUsersText}>
+                      Este projeto não possui membros na equipe.
                     </Text>
-                  </TouchableOpacity>
-                ))}
+                    <TouchableOpacity 
+                      style={styles.refreshUsersButton}
+                      onPress={() => loadAvailableUsers()}
+                    >
+                      <Ionicons name="refresh-outline" size={16} color="#007AFF" />
+                      <Text style={styles.refreshUsersText}>Recarregar</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : (
+                  availableUsers.map((user) => (
+                    <TouchableOpacity
+                      key={user.id}
+                      style={[
+                        styles.userOption,
+                        { backgroundColor: taskForm.assignedUserId === user.id ? '#007AFF' : '#f8f9fa' }
+                      ]}
+                      onPress={() => setTaskForm({...taskForm, assignedUserId: user.id})}
+                    >
+                      <Text style={[
+                        styles.userOptionText,
+                        { color: taskForm.assignedUserId === user.id ? '#fff' : '#007AFF' }
+                      ]}>
+                        {user.fullName || user.name || user.email || `Usuário ${user.id}`}
+                      </Text>
+                    </TouchableOpacity>
+                  ))
+                )}
               </View>
             </View>
 
@@ -934,7 +1171,16 @@ const Tasks = ({ navigation, route }) => {
             </View>
 
             <View style={styles.formGroup}>
-              <Text style={styles.formLabel}>Atribuir a</Text>
+              <View style={styles.assignmentHeader}>
+                <Text style={styles.formLabel}>Atribuir a</Text>
+                <Text style={styles.assignmentSubtitle}>
+                  {availableUsers.length === 0 
+                    ? 'Nenhum membro na equipe' 
+                    : `${availableUsers.length} membro(s) da equipe`
+                  }
+                </Text>
+              </View>
+              
               <View style={styles.userSelector}>
                 <TouchableOpacity
                   style={[
@@ -950,23 +1196,39 @@ const Tasks = ({ navigation, route }) => {
                     Não atribuído
                   </Text>
                 </TouchableOpacity>
-                {availableUsers.map((user) => (
-                  <TouchableOpacity
-                    key={user.id}
-                    style={[
-                      styles.userOption,
-                      { backgroundColor: taskForm.assignedUserId === user.id ? '#007AFF' : '#f8f9fa' }
-                    ]}
-                    onPress={() => setTaskForm({...taskForm, assignedUserId: user.id})}
-                  >
-                    <Text style={[
-                      styles.userOptionText,
-                      { color: taskForm.assignedUserId === user.id ? '#fff' : '#007AFF' }
-                    ]}>
-                      {user.fullName}
+                
+                {availableUsers.length === 0 ? (
+                  <View style={styles.noUsersContainer}>
+                    <Text style={styles.noUsersText}>
+                      Este projeto não possui membros na equipe.
                     </Text>
-                  </TouchableOpacity>
-                ))}
+                    <TouchableOpacity 
+                      style={styles.refreshUsersButton}
+                      onPress={() => loadAvailableUsers()}
+                    >
+                      <Ionicons name="refresh-outline" size={16} color="#007AFF" />
+                      <Text style={styles.refreshUsersText}>Recarregar</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : (
+                  availableUsers.map((user) => (
+                    <TouchableOpacity
+                      key={user.id}
+                      style={[
+                        styles.userOption,
+                        { backgroundColor: taskForm.assignedUserId === user.id ? '#007AFF' : '#f8f9fa' }
+                      ]}
+                      onPress={() => setTaskForm({...taskForm, assignedUserId: user.id})}
+                    >
+                      <Text style={[
+                        styles.userOptionText,
+                        { color: taskForm.assignedUserId === user.id ? '#fff' : '#007AFF' }
+                      ]}>
+                        {user.fullName || user.name || user.email || `Usuário ${user.id}`}
+                      </Text>
+                    </TouchableOpacity>
+                  ))
+                )}
               </View>
             </View>
 
@@ -1375,6 +1637,42 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '600',
     textAlign: 'center',
+  },
+  assignmentHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  assignmentSubtitle: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#666',
+  },
+  noUsersContainer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 8,
+  },
+  noUsersText: {
+    fontSize: 12,
+    color: '#666',
+    marginRight: 8,
+  },
+  refreshUsersButton: {
+    padding: 8,
+    borderWidth: 1,
+    borderColor: '#007AFF',
+    borderRadius: 8,
+  },
+  refreshUsersText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#007AFF',
   },
 });
 

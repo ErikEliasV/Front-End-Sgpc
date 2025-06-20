@@ -287,6 +287,21 @@ const Register = ({ navigation }) => {
                   GERENTE
                 </Text>
               </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.roleButton,
+                  formData.roleNames.includes('ADMIN') && styles.roleButtonSelected
+                ]}
+                onPress={() => handleRoleToggle('ADMIN')}
+              >
+                <Text style={[
+                  styles.roleButtonText,
+                  formData.roleNames.includes('ADMIN') && styles.roleButtonTextSelected
+                ]}>
+                  ADMIN
+                </Text>
+              </TouchableOpacity>
             </View>
           </View>
 
@@ -381,16 +396,18 @@ const styles = StyleSheet.create({
   },
   rolesContainer: {
     flexDirection: 'row',
-    gap: 10,
+    gap: 8,
+    flexWrap: 'wrap',
   },
   roleButton: {
-    flex: 1,
+    minWidth: '30%',
     borderWidth: 1,
     borderColor: '#ddd',
     borderRadius: 8,
     padding: 12,
     alignItems: 'center',
     backgroundColor: '#fff',
+    marginBottom: 8,
   },
   roleButtonSelected: {
     borderColor: '#007AFF',

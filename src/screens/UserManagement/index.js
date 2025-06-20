@@ -31,6 +31,7 @@ const UserManagement = ({ navigation }) => {
   // Estados para modais
   const [showUserDetailsModal, setShowUserDetailsModal] = useState(false);
   const [showEditUserModal, setShowEditUserModal] = useState(false);
+  const [showCreateUserModal, setShowCreateUserModal] = useState(false);
   
   // Estados para edição de usuário
   const [editingUser, setEditingUser] = useState({
@@ -39,9 +40,22 @@ const UserManagement = ({ navigation }) => {
     email: '',
     phone: '',
     hourlyRate: '',
-    roleNames: [],
+    roles: [],
     isActive: true,
   });
+
+  // Estados para criação de usuário
+  const [newUser, setNewUser] = useState({
+    fullName: '',
+    email: '',
+    phone: '',
+    password: '',
+    confirmPassword: '',
+    hourlyRate: '',
+    roles: ['USER'],
+  });
+
+  const [creatingUser, setCreatingUser] = useState(false);
 
   // URLs base da API
   const API_BASE = 'https://sgpc-api.koyeb.app/api';
@@ -84,7 +98,10 @@ const UserManagement = ({ navigation }) => {
           [
             {
               text: 'OK',
-              onPress: () => navigation.navigate('Login'),
+              onPress: () => {
+                AsyncStorage.removeItem('userToken');
+                navigation.navigate('Login');
+              },
             },
           ]
         );
@@ -105,28 +122,7 @@ const UserManagement = ({ navigation }) => {
   const loadInitialData = async () => {
     setLoading(true);
     try {
-      // Primeiro tentar carregar da API
-      await loadAllUsers();
-      await loadActiveUsers();
-      
-      // Se conseguiu carregar usuários mas não conseguiu carregar ativos (erro 500)
-      // assumir que todos são ativos por enquanto
-      if (allUsers.length > 0 && activeUsers.length === 0) {
-        console.log('🔄 Erro ao carregar usuários ativos, usando todos como ativos temporariamente');
-        setActiveUsers(allUsers);
-      }
-      
-      // Aguardar um pouco para garantir que os estados foram atualizados
-      setTimeout(() => {
-        // Verificar se conseguiu carregar dados da API
-        if (allUsers.length === 0) {
-          console.log('⚠️ Nenhum usuário foi carregado da API');
-          setUsingTestData(true);
-        } else {
-          console.log('✅ Usuários carregados da API com sucesso!');
-          setUsingTestData(false);
-        }
-      }, 1000);
+      await loadUsers();
     } catch (error) {
       console.error('Erro ao carregar dados iniciais:', error);
     } finally {
@@ -140,118 +136,93 @@ const UserManagement = ({ navigation }) => {
     setRefreshing(false);
   };
 
-  // Funções da API
-  const loadAllUsers = async () => {
+  // Carregar lista de usuários
+  const loadUsers = async () => {
     try {
-      console.log('🔄 Carregando todos os usuários...');
-      const headers = await getAuthHeaders();
-      console.log('🔑 Headers:', headers);
-      
-      const response = await fetch(`${API_BASE}/users`, {
-        method: 'GET',
-        headers: headers,
-      });
-      console.log('📡 Response status:', response.status);
-      
-      if (response.ok) {
-        const data = await response.json();
-        console.log('📊 Dados recebidos (todos os usuários):', data);
-        
-        // Verificar diferentes formatos de resposta da API
-        let users = [];
-        if (Array.isArray(data)) {
-          users = data;
-        } else if (data.data && Array.isArray(data.data)) {
-          users = data.data;
-        } else if (data.users && Array.isArray(data.users)) {
-          users = data.users;
-        } else if (data.content && Array.isArray(data.content)) {
-          users = data.content;
-        }
-        
-        console.log('👥 Usuários processados:', users.length);
-        setAllUsers(users);
-      } else {
-        const errorText = await response.text();
-        console.error('❌ Erro na resposta:', response.status, errorText);
-        
-        if (response.status === 401) {
-          console.log('🔒 Token inválido ou expirado');
-          Alert.alert(
-            'Sessão Expirada',
-            'Sua sessão expirou. Faça login novamente.',
-            [
-              {
-                text: 'OK',
-                onPress: () => {
-                  AsyncStorage.removeItem('userToken');
-                  navigation.navigate('Login');
-                },
-              },
-            ]
-          );
-        } else {
-          Alert.alert('Erro', `Falha ao carregar usuários: ${response.status}`);
-        }
-      }
-    } catch (error) {
-      console.error('💥 Erro ao carregar todos os usuários:', error);
-      Alert.alert('Erro', 'Falha ao carregar usuários - Erro de conexão');
-    }
-  };
-
-  const loadActiveUsers = async () => {
-    try {
-      console.log('🔄 Carregando usuários ativos...');
+      setLoading(true);
       const headers = await getAuthHeaders();
       
-      // Tentar primeiro o endpoint correto
-      let response = await fetch(`${API_BASE}/users/active`, {
-        method: 'GET',
-        headers: headers,
-      });
+      // Tentar primeiro usuários ativos, depois todos os usuários
+      const endpoints = [
+        `${API_BASE}/users/active`,
+        `${API_BASE}/users`
+      ];
       
-      // Se der erro 404, tentar o endpoint alternativo
-      if (response.status === 404) {
-        console.log('⚠️ Endpoint /users/active não encontrado, tentando /users/activate...');
-        response = await fetch(`${API_BASE}/users/activate`, {
-          method: 'GET',
-          headers: headers,
-        });
+      let usersData = [];
+      let success = false;
+      
+      for (const endpoint of endpoints) {
+        try {
+          console.log('📡 Tentando carregar usuários de:', endpoint);
+          const response = await fetch(endpoint, {
+            method: 'GET',
+            headers: headers,
+          });
+          
+          if (response.ok) {
+            const data = await response.json();
+            console.log('👥 Usuários carregados de', endpoint, ':', data.length);
+            
+            if (Array.isArray(data)) {
+              usersData = data;
+              success = true;
+              break;
+            } else if (data && typeof data === 'object') {
+              // Verificar diferentes formatos de resposta
+              const possibleArrays = ['data', 'users', 'content', 'items'];
+              for (const prop of possibleArrays) {
+                if (data[prop] && Array.isArray(data[prop])) {
+                  usersData = data[prop];
+                  success = true;
+                  break;
+                }
+              }
+              if (success) break;
+            }
+          } else if (response.status === 403 || response.status === 401) {
+            console.log('🔒 Sem permissão para', endpoint, '- tentando próximo...');
+            if (response.status === 401) {
+              Alert.alert(
+                'Sessão Expirada',
+                'Sua sessão expirou. Faça login novamente.',
+                [
+                  {
+                    text: 'OK',
+                    onPress: () => {
+                      AsyncStorage.removeItem('userToken');
+                      navigation.navigate('Login');
+                    },
+                  },
+                ]
+              );
+              return;
+            }
+            continue;
+          } else {
+            console.warn('⚠️ Falha ao carregar usuários de', endpoint, '- Status:', response.status);
+          }
+        } catch (endpointError) {
+          console.error('Erro ao tentar endpoint', endpoint, ':', endpointError);
+          continue;
+        }
       }
       
-      console.log('📡 Response status (ativos):', response.status);
-      
-      if (response.ok) {
-        const data = await response.json();
-        console.log('📊 Dados recebidos (usuários ativos):', data);
-        
-        // Verificar diferentes formatos de resposta da API
-        let users = [];
-        if (Array.isArray(data)) {
-          users = data;
-        } else if (data.data && Array.isArray(data.data)) {
-          users = data.data;
-        } else if (data.users && Array.isArray(data.users)) {
-          users = data.users;
-        } else if (data.content && Array.isArray(data.content)) {
-          users = data.content;
-        }
-        
-        console.log('✅ Usuários ativos processados:', users.length);
-        setActiveUsers(users);
+      if (success) {
+        setAllUsers(usersData);
+        setActiveUsers(usersData.filter(user => user.isActive !== false)); // Assumir ativo se não especificado
+        setUsingTestData(false);
+        console.log('✅ Usuários carregados com sucesso:', usersData.length);
       } else {
-        const errorText = await response.text();
-        console.error('❌ Erro na resposta (ativos):', response.status, errorText);
-        
-        if (response.status === 500) {
-          console.log('🚧 Erro 500 no servidor - endpoint pode estar com problema');
-          // Em caso de erro 500, assumir que todos os usuários carregados são ativos
-          // Isso será corrigido quando o servidor estiver funcionando
-        }
+        console.error('❌ Falha em todos os endpoints de usuários');
+        setUsingTestData(true);
+        Alert.alert('Erro', 'Não foi possível carregar os usuários.');
       }
     } catch (error) {
-      console.error('💥 Erro ao carregar usuários ativos:', error);
+      console.error('Erro ao carregar usuários:', error);
+      setUsingTestData(true);
+      Alert.alert('Erro', 'Erro de conexão.');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -315,124 +286,109 @@ const UserManagement = ({ navigation }) => {
     }
   };
 
-  const deactivateUser = async (userId) => {
+  const createUser = async () => {
     try {
-      console.log('🔄 Desativando usuário:', userId);
-      
       const headers = await getAuthHeaders();
       
-      // Tentar diferentes formatos de endpoint e request body
-      const endpoints = [
-        { url: `${API_BASE}/users/deactivate`, body: { userId } },
-        { url: `${API_BASE}/users/deactive`, body: { userId } },
-        { url: `${API_BASE}/users/${userId}/deactivate`, body: {} },
-        { url: `${API_BASE}/users/deactivate`, body: { id: userId } },
-      ];
-      
-      for (let i = 0; i < endpoints.length; i++) {
-        const { url, body } = endpoints[i];
-        
-        console.log(`📡 Tentativa ${i + 1} - Endpoint:`, url);
-        console.log(`📝 Request body ${i + 1}:`, body);
-        
-        const response = await fetch(url, {
-          method: 'PUT',
-          headers: headers,
-          body: JSON.stringify(body),
+      // Usar o endpoint específico para admins criarem usuários
+      const response = await fetch(`${API_BASE}/users/admin/create`, {
+        method: 'POST',
+        headers: headers,
+        body: JSON.stringify({
+          fullName: newUser.fullName,
+          email: newUser.email,
+          phone: newUser.phone,
+          password: newUser.password,
+          hourlyRate: parseFloat(newUser.hourlyRate) || 0,
+          roleName: newUser.roles.join(',') // Enviar roles como string separada por vírgula
+        }),
+      });
+
+      if (response.ok) {
+        const createdUser = await response.json();
+        Alert.alert('Sucesso', 'Usuário criado com sucesso!');
+        setShowCreateUserModal(false);
+        setNewUser({
+          fullName: '',
+          email: '',
+          phone: '',
+          password: '',
+          confirmPassword: '',
+          hourlyRate: '',
+          roles: []
         });
-
-        console.log(`📡 Response status (tentativa ${i + 1}):`, response.status);
-        const responseText = await response.text();
-        console.log(`📊 Response body (tentativa ${i + 1}):`, responseText);
-
-        if (response.ok) {
-          Alert.alert('Sucesso', 'Usuário desativado com sucesso!');
-          loadInitialData();
-          return;
-        } else if (response.status !== 404 && response.status !== 500) {
-          // Se não é 404 ou 500, não tenta outros endpoints
-          let errorMessage = 'Falha ao desativar usuário';
-          try {
-            const errorData = JSON.parse(responseText);
-            errorMessage = errorData.message || errorData.mensagem || errorMessage;
-          } catch (e) {
-            errorMessage = responseText || errorMessage;
-          }
-          console.error('❌ Erro na desativação:', response.status, errorMessage);
-          Alert.alert('Erro', `${errorMessage} (Status: ${response.status})`);
-          return;
+        loadInitialData(); // Recarregar lista
+      } else {
+        const errorData = await response.json();
+        console.error('Erro ao criar usuário:', errorData);
+        
+        let errorMessage = 'Erro ao criar usuário';
+        if (errorData.mensagem) {
+          errorMessage = errorData.mensagem;
+        } else if (errorData.message) {
+          errorMessage = errorData.message;
         }
         
-        // Se chegou aqui, foi 404 ou 500, tenta próximo endpoint
-        console.log(`⚠️ Tentativa ${i + 1} falhou, tentando próximo endpoint...`);
+        Alert.alert('Erro', errorMessage);
       }
-      
-      // Se chegou aqui, todos os endpoints falharam
-      Alert.alert('Erro', 'Todos os endpoints de desativação falharam. Verifique a documentação da API.');
-      
     } catch (error) {
-      console.error('💥 Erro ao desativar usuário:', error);
-      Alert.alert('Erro', 'Erro de conexão');
+      console.error('Erro ao criar usuário:', error);
+      Alert.alert('Erro', 'Erro de conexão ao criar usuário.');
     }
+  };
+
+  const deactivateUser = async (userId) => {
+    Alert.alert(
+      'Desativar Usuário',
+      'Tem certeza que deseja desativar este usuário? Ele não poderá mais fazer login.',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { 
+          text: 'Desativar', 
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const headers = await getAuthHeaders();
+              const response = await fetch(`${API_BASE}/users/${userId}/deactivate`, {
+                method: 'PUT',
+                headers: headers,
+              });
+              
+              if (response.ok) {
+                Alert.alert('Sucesso', 'Usuário desativado com sucesso!');
+                loadInitialData();
+              } else {
+                const errorData = await response.json();
+                Alert.alert('Erro', errorData.mensagem || 'Falha ao desativar usuário.');
+              }
+            } catch (error) {
+              console.error('Erro ao desativar usuário:', error);
+              Alert.alert('Erro', 'Erro de conexão.');
+            }
+          }
+        }
+      ]
+    );
   };
 
   const activateUser = async (userId) => {
     try {
-      console.log('🔄 Ativando usuário:', userId);
-      
       const headers = await getAuthHeaders();
+      const response = await fetch(`${API_BASE}/users/${userId}/activate`, {
+        method: 'PUT',
+        headers: headers,
+      });
       
-      // Tentar diferentes formatos de endpoint e request body
-      const endpoints = [
-        { url: `${API_BASE}/users/activate`, body: { userId } },
-        { url: `${API_BASE}/users/${userId}/activate`, body: {} },
-        { url: `${API_BASE}/users/activate`, body: { id: userId } },
-      ];
-      
-      for (let i = 0; i < endpoints.length; i++) {
-        const { url, body } = endpoints[i];
-        
-        console.log(`📡 Tentativa ${i + 1} - Endpoint:`, url);
-        console.log(`📝 Request body ${i + 1}:`, body);
-        
-        const response = await fetch(url, {
-          method: 'PUT',
-          headers: headers,
-          body: JSON.stringify(body),
-        });
-
-        console.log(`📡 Response status (tentativa ${i + 1}):`, response.status);
-        const responseText = await response.text();
-        console.log(`📊 Response body (tentativa ${i + 1}):`, responseText);
-
-        if (response.ok) {
-          Alert.alert('Sucesso', 'Usuário ativado com sucesso!');
-          loadInitialData();
-          return;
-        } else if (response.status !== 404 && response.status !== 500) {
-          // Se não é 404 ou 500, não tenta outros endpoints
-          let errorMessage = 'Falha ao ativar usuário';
-          try {
-            const errorData = JSON.parse(responseText);
-            errorMessage = errorData.message || errorData.mensagem || errorMessage;
-          } catch (e) {
-            errorMessage = responseText || errorMessage;
-          }
-          console.error('❌ Erro na ativação:', response.status, errorMessage);
-          Alert.alert('Erro', `${errorMessage} (Status: ${response.status})`);
-          return;
-        }
-        
-        // Se chegou aqui, foi 404 ou 500, tenta próximo endpoint
-        console.log(`⚠️ Tentativa ${i + 1} falhou, tentando próximo endpoint...`);
+      if (response.ok) {
+        Alert.alert('Sucesso', 'Usuário ativado com sucesso!');
+        loadInitialData();
+      } else {
+        const errorData = await response.json();
+        Alert.alert('Erro', errorData.mensagem || 'Falha ao ativar usuário.');
       }
-      
-      // Se chegou aqui, todos os endpoints falharam
-      Alert.alert('Erro', 'Todos os endpoints de ativação falharam. Verifique a documentação da API.');
-      
     } catch (error) {
-      console.error('💥 Erro ao ativar usuário:', error);
-      Alert.alert('Erro', 'Erro de conexão');
+      console.error('Erro ao ativar usuário:', error);
+      Alert.alert('Erro', 'Erro de conexão.');
     }
   };
 
@@ -473,7 +429,7 @@ const UserManagement = ({ navigation }) => {
       email: user.email || '',
       phone: user.phone || '',
       hourlyRate: user.hourlyRate?.toString() || '',
-      roleNames: user.roles || user.roleNames || [],
+      roles: user.roles || user.roleNames || [],
       isActive: activeUsers.some(activeUser => activeUser.id === user.id),
       password: '', // Campo de senha obrigatório para atualização
     });
@@ -481,40 +437,76 @@ const UserManagement = ({ navigation }) => {
   };
 
   const handleSaveUser = async () => {
-    if (!editingUser.fullName || !editingUser.email) {
-      Alert.alert('Erro', 'Nome completo e email são obrigatórios');
+    if (!editingUser.fullName || !editingUser.email || !editingUser.password) {
+      Alert.alert('Erro', 'Preencha todos os campos obrigatórios');
       return;
     }
 
-    if (!editingUser.password || editingUser.password.length < 6) {
-      Alert.alert('Erro', 'Senha é obrigatória e deve ter pelo menos 6 caracteres');
+    if (!editingUser.email.includes('@')) {
+      Alert.alert('Erro', 'Email inválido');
       return;
     }
 
-    // Dados do usuário com senha obrigatória
+    if (editingUser.password.length < 6) {
+      Alert.alert('Erro', 'A senha deve ter pelo menos 6 caracteres');
+      return;
+    }
+
     const userData = {
       fullName: editingUser.fullName,
       email: editingUser.email,
-      phone: editingUser.phone || '',
-      hourlyRate: parseFloat(editingUser.hourlyRate) || 0,
-      roleNames: editingUser.roleNames || [],
+      phone: editingUser.phone,
       password: editingUser.password,
+      hourlyRate: parseFloat(editingUser.hourlyRate) || 0,
+      roles: editingUser.roles || ['USER'],
+      isActive: editingUser.isActive,
     };
 
-    console.log('🔄 Atualizando usuário com senha...');
-    console.log('📝 Dados (sem senha):', { ...userData, password: '[OCULTA]' });
-    
-    const success = await updateUser(editingUser.id, userData);
-    if (success) {
-      // Se a atualização foi bem-sucedida, verificar mudança de status
-      if (editingUser.isActive !== activeUsers.some(u => u.id === editingUser.id)) {
-        if (editingUser.isActive) {
-          await activateUser(editingUser.id);
-        } else {
-          await deactivateUser(editingUser.id);
-        }
-      }
+    await updateUser(editingUser.id, userData);
+  };
+
+  const handleCreateUser = async () => {
+    if (!newUser.fullName || !newUser.email || !newUser.password) {
+      Alert.alert('Erro', 'Preencha todos os campos obrigatórios');
+      return;
     }
+
+    if (!newUser.email.includes('@')) {
+      Alert.alert('Erro', 'Email inválido');
+      return;
+    }
+
+    if (newUser.password !== newUser.confirmPassword) {
+      Alert.alert('Erro', 'As senhas não coincidem');
+      return;
+    }
+
+    if (newUser.password.length < 6) {
+      Alert.alert('Erro', 'A senha deve ter pelo menos 6 caracteres');
+      return;
+    }
+
+    if (newUser.roles.length === 0) {
+      Alert.alert('Erro', 'Selecione pelo menos uma função');
+      return;
+    }
+
+    setCreatingUser(true);
+    await createUser();
+    setCreatingUser(false);
+  };
+
+  const handleRoleToggle = (role) => {
+    setNewUser(prev => {
+      const newRoles = prev.roles.includes(role)
+        ? prev.roles.filter(r => r !== role)
+        : [...prev.roles, role];
+      
+      return {
+        ...prev,
+        roles: newRoles
+      };
+    });
   };
 
   const confirmStatusChange = (user, newStatus) => {
@@ -690,7 +682,12 @@ const UserManagement = ({ navigation }) => {
           <Text style={styles.subtitle}>Controle da equipe</Text>
         </View>
 
-
+        <TouchableOpacity
+          style={styles.addButton}
+          onPress={() => setShowCreateUserModal(true)}
+        >
+          <Ionicons name="add" size={24} color="#fff" />
+        </TouchableOpacity>
       </View>
 
       {/* Busca */}
@@ -703,8 +700,6 @@ const UserManagement = ({ navigation }) => {
           onChangeText={setSearchText}
         />
       </View>
-
-
 
       {allUsers.length > 0 && activeUsers.length === 0 && (
         <View style={styles.warningBanner}>
@@ -922,6 +917,161 @@ const UserManagement = ({ navigation }) => {
               >
                 <Ionicons name="checkmark" size={20} color="#fff" />
                 <Text style={styles.saveButtonText}>Salvar Alterações</Text>
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
+        </View>
+      </Modal>
+
+      {/* Modal de Criação de Usuário */}
+      <Modal
+        visible={showCreateUserModal}
+        animationType="slide"
+        presentationStyle="pageSheet"
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Criar Novo Usuário</Text>
+            <TouchableOpacity
+              onPress={() => setShowCreateUserModal(false)}
+            >
+              <Ionicons name="close" size={24} color="#666" />
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView style={styles.modalContent}>
+            <View style={styles.editForm}>
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Nome Completo *</Text>
+                <TextInput
+                  style={styles.textInput}
+                  value={newUser.fullName}
+                  onChangeText={(text) => setNewUser({...newUser, fullName: text})}
+                  placeholder="Digite o nome completo"
+                />
+              </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Email *</Text>
+                <TextInput
+                  style={styles.textInput}
+                  value={newUser.email}
+                  onChangeText={(text) => setNewUser({...newUser, email: text})}
+                  placeholder="Digite o email"
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                />
+              </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Telefone</Text>
+                <TextInput
+                  style={styles.textInput}
+                  value={newUser.phone}
+                  onChangeText={(text) => setNewUser({...newUser, phone: text})}
+                  placeholder="Digite o telefone"
+                  keyboardType="phone-pad"
+                />
+              </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Senha *</Text>
+                <TextInput
+                  style={styles.textInput}
+                  value={newUser.password}
+                  onChangeText={(text) => setNewUser({...newUser, password: text})}
+                  placeholder="Digite a senha (mín. 6 caracteres)"
+                  secureTextEntry={true}
+                  autoCapitalize="none"
+                />
+              </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Confirmar Senha *</Text>
+                <TextInput
+                  style={styles.textInput}
+                  value={newUser.confirmPassword}
+                  onChangeText={(text) => setNewUser({...newUser, confirmPassword: text})}
+                  placeholder="Confirme a senha"
+                  secureTextEntry={true}
+                  autoCapitalize="none"
+                />
+              </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Valor por Hora (R$)</Text>
+                <TextInput
+                  style={styles.textInput}
+                  value={newUser.hourlyRate}
+                  onChangeText={(text) => setNewUser({...newUser, hourlyRate: text})}
+                  placeholder="0.00"
+                  keyboardType="numeric"
+                />
+              </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Funções *</Text>
+                <View style={styles.rolesContainer}>
+                  <TouchableOpacity
+                    style={[
+                      styles.roleButtonModal,
+                      newUser.roles.includes('USER') && styles.roleButtonSelected
+                    ]}
+                    onPress={() => handleRoleToggle('USER')}
+                  >
+                    <Text style={[
+                      styles.roleButtonText,
+                                              newUser.roles.includes('USER') && styles.roleButtonTextSelected
+                    ]}>
+                      USUÁRIO
+                    </Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[
+                      styles.roleButtonModal,
+                      newUser.roles.includes('MANAGER') && styles.roleButtonSelected
+                    ]}
+                    onPress={() => handleRoleToggle('MANAGER')}
+                  >
+                    <Text style={[
+                      styles.roleButtonText,
+                                              newUser.roles.includes('MANAGER') && styles.roleButtonTextSelected
+                    ]}>
+                      GERENTE
+                    </Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[
+                      styles.roleButtonModal,
+                      newUser.roles.includes('ADMIN') && styles.roleButtonSelected
+                    ]}
+                    onPress={() => handleRoleToggle('ADMIN')}
+                  >
+                    <Text style={[
+                      styles.roleButtonText,
+                                              newUser.roles.includes('ADMIN') && styles.roleButtonTextSelected
+                    ]}>
+                      ADMIN
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              <TouchableOpacity
+                style={[styles.saveButton, creatingUser && styles.saveButtonDisabled]}
+                onPress={handleCreateUser}
+                disabled={creatingUser}
+              >
+                {creatingUser ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <>
+                    <Ionicons name="person-add" size={20} color="#fff" />
+                    <Text style={styles.saveButtonText}>Criar Usuário</Text>
+                  </>
+                )}
               </TouchableOpacity>
             </View>
           </ScrollView>
@@ -1297,7 +1447,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginLeft: 8,
   },
-
   debugButton: {
     padding: 8,
     borderRadius: 4,
@@ -1319,6 +1468,42 @@ const styles = StyleSheet.create({
     color: '#721c24',
     marginLeft: 8,
     flex: 1,
+  },
+  addButton: {
+    padding: 8,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+  },
+  rolesContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  roleButtonModal: {
+    minWidth: '30%',
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 8,
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    marginBottom: 8,
+  },
+  roleButtonSelected: {
+    borderColor: '#007AFF',
+    backgroundColor: '#007AFF',
+  },
+  roleButtonText: {
+    fontSize: 14,
+    color: '#333',
+    fontWeight: '600',
+  },
+  roleButtonTextSelected: {
+    color: '#fff',
+    fontWeight: '600',
+  },
+  saveButtonDisabled: {
+    backgroundColor: '#ccc',
   },
 });
 

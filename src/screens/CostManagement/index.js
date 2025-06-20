@@ -27,13 +27,43 @@ const CostManagement = () => {
   const [overBudgetProjects, setOverBudgetProjects] = useState([]);
   const [budgetReport, setBudgetReport] = useState(null);
   const [taskReport, setTaskReport] = useState(null);
+  const [projects, setProjects] = useState([]);
+  const [selectedProject, setSelectedProject] = useState(null);
+  const [projectTasks, setProjectTasks] = useState([]);
 
   // Estados para modais
   const [showAddServiceModal, setShowAddServiceModal] = useState(false);
   const [showTaskDetailsModal, setShowTaskDetailsModal] = useState(false);
+  const [showProgressModal, setShowProgressModal] = useState(false);
+  const [showProjectSelector, setShowProjectSelector] = useState(false);
+  const [showAddServiceToTaskModal, setShowAddServiceToTaskModal] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState(null);
 
-  // URLs base da API
+  // Estados para formulários
+  const [newService, setNewService] = useState({
+    name: '',
+    description: '',
+    unitOfMeasurement: '',
+    unitLaborCost: '',
+    unitMaterialCost: '',
+    unitEquipmentCost: '',
+    isActive: true
+  });
+
+  const [progressUpdate, setProgressUpdate] = useState({
+    progressPercentage: '',
+    notes: '',
+    actualHours: ''
+  });
+
+  const [serviceToTask, setServiceToTask] = useState({
+    serviceId: null,
+    quantity: '',
+    unitCostOverride: '',
+    notes: ''
+  });
+
+  // URLs base da API - CORRIGIDAS
   const API_BASE = 'https://sgpc-api.koyeb.app/api/cost';
   
 
@@ -65,9 +95,9 @@ const CostManagement = () => {
   const loadInitialData = async () => {
     setLoading(true);
     try {
-              await Promise.all([
+      await Promise.all([
         loadServices(),
-        loadProjectBudget(2), // Usando projeto real: "Reforma Comercial Beta"
+        loadProjects(),
         loadOverBudgetProjects(),
         loadBudgetReport(),
       ]);
@@ -84,19 +114,200 @@ const CostManagement = () => {
     setRefreshing(false);
   };
 
-  // Funções da API
-  const loadServices = async () => {
+  // NOVO: Carregar projetos disponíveis
+  const loadProjects = async () => {
     try {
       const headers = await getAuthHeaders();
-      const response = await fetch(`${API_BASE}/services`, {
+      console.log('🔍 Carregando projetos...');
+      
+      const response = await fetch('https://sgpc-api.koyeb.app/api/projects', {
         method: 'GET',
         headers: headers,
       });
       
       if (response.ok) {
         const data = await response.json();
+        console.log('✅ Projetos carregados:', data.length);
+        setProjects(data);
+        
+        // Seleciona automaticamente o primeiro projeto se houver
+        if (data.length > 0 && !selectedProject) {
+          const firstProject = data[0];
+          setSelectedProject(firstProject);
+          await loadProjectBudget(firstProject.id);
+          await loadProjectTasks(firstProject.id);
+        }
+      } else {
+        console.error('❌ Erro ao carregar projetos:', response.status);
+      }
+    } catch (error) {
+      console.error('❌ Erro ao carregar projetos:', error);
+    }
+  };
+
+  // NOVO: Carregar tarefas do projeto
+  const loadProjectTasks = async (projectId) => {
+    try {
+      const headers = await getAuthHeaders();
+      console.log('🔍 Carregando tarefas do projeto:', projectId);
+      
+      // Tentar diferentes endpoints para obter tarefas do projeto
+      const endpoints = [
+        `https://sgpc-api.koyeb.app/api/projects/${projectId}/tasks/kanban`,
+        `https://sgpc-api.koyeb.app/api/projects/${projectId}/tasks`,
+        `https://sgpc-api.koyeb.app/api/tasks/project/${projectId}`,
+        `https://sgpc-api.koyeb.app/api/tasks`
+      ];
+      
+      let projectTasksData = [];
+      let foundTasks = false;
+      
+      for (const endpoint of endpoints) {
+        try {
+          console.log('🌐 Tentando endpoint de tarefas:', endpoint);
+          
+          const response = await fetch(endpoint, {
+            method: 'GET',
+            headers: headers,
+          });
+          
+          if (response.ok) {
+            const data = await response.json();
+            console.log('📊 Resposta do endpoint', endpoint, ':', data);
+            
+            // Se for o endpoint kanban, extrair tarefas de todas as colunas
+            if (endpoint.includes('/kanban') && data) {
+              const allTasks = [];
+              Object.keys(data).forEach(column => {
+                if (Array.isArray(data[column])) {
+                  allTasks.push(...data[column]);
+                }
+              });
+              
+              if (allTasks.length > 0) {
+                console.log('✅ Tarefas encontradas via kanban:', allTasks.length);
+                projectTasksData = allTasks;
+                foundTasks = true;
+                break;
+              }
+            }
+            // Se for array de tarefas
+            else if (Array.isArray(data)) {
+              // Se for o endpoint /tasks (todas as tarefas), filtrar por projectId
+              if (endpoint.includes('/tasks') && !endpoint.includes('/projects/')) {
+                const filteredTasks = data.filter(task => 
+                  task.projectId === projectId || 
+                  task.project?.id === projectId ||
+                  task.projectName === selectedProject?.name
+                );
+                
+                if (filteredTasks.length > 0) {
+                  console.log('✅ Tarefas filtradas por projeto:', filteredTasks.length, 'de', data.length, 'total');
+                  projectTasksData = filteredTasks;
+                  foundTasks = true;
+                  break;
+                }
+              }
+              // Para outros endpoints, usar dados diretamente
+              else if (data.length > 0) {
+                console.log('✅ Tarefas encontradas via', endpoint, ':', data.length);
+                projectTasksData = data;
+                foundTasks = true;
+                break;
+              }
+            }
+            // Se for objeto com propriedades de tarefas
+            else if (data && typeof data === 'object') {
+              const possibleTaskArrays = ['tasks', 'data', 'items'];
+              for (const prop of possibleTaskArrays) {
+                if (Array.isArray(data[prop])) {
+                  console.log('✅ Tarefas encontradas em', prop, ':', data[prop].length);
+                  projectTasksData = data[prop];
+                  foundTasks = true;
+                  break;
+                }
+              }
+              if (foundTasks) break;
+            }
+          } else {
+            console.log('⚠️ Endpoint', endpoint, 'retornou status:', response.status);
+          }
+        } catch (endpointError) {
+          console.log('❌ Erro no endpoint', endpoint, ':', endpointError.message);
+        }
+      }
+      
+      if (foundTasks) {
+        console.log('✅ Total de tarefas do projeto carregadas:', projectTasksData.length);
+        
+        // Log detalhado das tarefas para debug
+        projectTasksData.forEach((task, index) => {
+          console.log(`📋 Tarefa ${index + 1}:`, {
+            id: task.id,
+            title: task.title,
+            status: task.status,
+            totalCost: task.totalCost,
+            projectId: task.projectId,
+            projectName: task.projectName
+          });
+        });
+        
+        // Tentar carregar custos das tarefas se não estiverem presentes
+        const tasksWithCosts = await Promise.all(
+          projectTasksData.map(async (task) => {
+            if (!task.totalCost && task.id) {
+              try {
+                console.log('💰 Carregando custo da tarefa:', task.id);
+                const taskReportResponse = await fetch(`${API_BASE}/tasks/${task.id}/report`, {
+                  method: 'GET',
+                  headers: headers,
+                });
+                
+                if (taskReportResponse.ok) {
+                  const reportData = await taskReportResponse.json();
+                  console.log('💰 Custo carregado para tarefa', task.id, ':', reportData.totalCost);
+                  return { ...task, totalCost: reportData.totalCost || 0 };
+                }
+              } catch (error) {
+                console.log('⚠️ Erro ao carregar custo da tarefa', task.id, ':', error.message);
+              }
+            }
+            return task;
+          })
+        );
+        
+        setProjectTasks(tasksWithCosts);
+      } else {
+        console.log('⚠️ Nenhuma tarefa encontrada para o projeto:', projectId);
+        setProjectTasks([]);
+      }
+    } catch (error) {
+      console.error('❌ Erro ao carregar tarefas do projeto:', error);
+      setProjectTasks([]);
+    }
+  };
+
+  // Funções da API - TODAS CORRIGIDAS
+  const loadServices = async () => {
+    try {
+      const headers = await getAuthHeaders();
+      console.log('🔍 Carregando serviços...');
+      
+      const response = await fetch(`${API_BASE}/services`, {
+        method: 'GET',
+        headers: headers,
+      });
+      
+      console.log('📡 Status da resposta:', response.status);
+      
+      if (response.ok) {
+        const data = await response.json();
+        console.log('✅ Serviços carregados:', data.length);
         setServices(data);
       } else {
+        const errorText = await response.text();
+        console.error('❌ Erro ao carregar serviços:', response.status, errorText);
+        
         if (response.status === 401) {
           Alert.alert('Erro de Autenticação', 'Sessão expirada. Faça login novamente.');
         } else {
@@ -104,47 +315,102 @@ const CostManagement = () => {
         }
       }
     } catch (error) {
-      console.error('Erro ao carregar serviços:', error);
+      console.error('❌ Erro de conexão ao carregar serviços:', error);
       Alert.alert('Erro de Conexão', 'Não foi possível conectar com a API');
     }
   };
 
+  // NOVO: Busca de serviços usando a API
   const searchServices = async (query) => {
-    // Busca local já que o endpoint de busca tem problemas
-    const filteredServices = services.filter(service => 
-      service.name.toLowerCase().includes(query.toLowerCase()) ||
-      service.description.toLowerCase().includes(query.toLowerCase())
-    );
-    setServices(filteredServices);
-  };
+    if (!query || query.length < 2) {
+      loadServices();
+      return;
+    }
 
-  const loadTaskServices = async (taskId) => {
     try {
-      const response = await fetch(`${API_BASE}/task/${taskId}/services`);
+      const headers = await getAuthHeaders();
+      console.log('🔍 Buscando serviços:', query);
+      
+      const response = await fetch(`${API_BASE}/services/search?name=${encodeURIComponent(query)}`, {
+        method: 'GET',
+        headers: headers,
+      });
+      
       if (response.ok) {
         const data = await response.json();
-        setTaskServices(data);
+        console.log('✅ Busca realizada:', data.length, 'resultados');
+        setServices(data);
+      } else {
+        console.error('❌ Erro na busca:', response.status);
+        // Fallback para busca local se a API falhar
+        const filteredServices = services.filter(service => 
+          service.name.toLowerCase().includes(query.toLowerCase()) ||
+          service.description.toLowerCase().includes(query.toLowerCase())
+        );
+        setServices(filteredServices);
       }
     } catch (error) {
-      console.error('Erro ao carregar serviços da tarefa:', error);
+      console.error('❌ Erro na busca de serviços:', error);
+      // Fallback para busca local
+      const filteredServices = services.filter(service => 
+        service.name.toLowerCase().includes(query.toLowerCase()) ||
+        service.description.toLowerCase().includes(query.toLowerCase())
+      );
+      setServices(filteredServices);
     }
   };
 
-  const loadTaskReport = async (taskId) => {
+  // CORRIGIDO: URL da API
+  const loadTaskServices = async (taskId) => {
     try {
-      const response = await fetch(`${API_BASE}/task/${taskId}/report`);
+      const headers = await getAuthHeaders();
+      console.log('🔍 Carregando serviços da tarefa:', taskId);
+      
+      const response = await fetch(`${API_BASE}/tasks/${taskId}/services`, {
+        method: 'GET',
+        headers: headers,
+      });
+      
       if (response.ok) {
         const data = await response.json();
-        setTaskReport(data);
+        console.log('✅ Serviços da tarefa carregados:', data.length);
+        setTaskServices(data);
+      } else {
+        console.error('❌ Erro ao carregar serviços da tarefa:', response.status);
       }
     } catch (error) {
-      console.error('Erro ao carregar relatório da tarefa:', error);
+      console.error('❌ Erro ao carregar serviços da tarefa:', error);
+    }
+  };
+
+  // CORRIGIDO: URL da API
+  const loadTaskReport = async (taskId) => {
+    try {
+      const headers = await getAuthHeaders();
+      console.log('🔍 Carregando relatório da tarefa:', taskId);
+      
+      const response = await fetch(`${API_BASE}/tasks/${taskId}/report`, {
+        method: 'GET',
+        headers: headers,
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        console.log('✅ Relatório da tarefa carregado:', data);
+        setTaskReport(data);
+      } else {
+        console.error('❌ Erro ao carregar relatório da tarefa:', response.status);
+      }
+    } catch (error) {
+      console.error('❌ Erro ao carregar relatório da tarefa:', error);
     }
   };
 
   const loadProjectBudget = async (projectId) => {
     try {
       const headers = await getAuthHeaders();
+      console.log('🔍 Carregando orçamento do projeto:', projectId);
+      
       const response = await fetch(`${API_BASE}/projects/${projectId}/budget`, {
         method: 'GET',
         headers: headers,
@@ -152,16 +418,21 @@ const CostManagement = () => {
       
       if (response.ok) {
         const data = await response.json();
+        console.log('✅ Orçamento do projeto carregado:', data);
         setProjectBudget(data);
+      } else {
+        console.error('❌ Erro ao carregar orçamento do projeto:', response.status);
       }
     } catch (error) {
-      console.error('Erro ao carregar orçamento do projeto:', error);
+      console.error('❌ Erro ao carregar orçamento do projeto:', error);
     }
   };
 
   const loadOverBudgetProjects = async () => {
     try {
       const headers = await getAuthHeaders();
+      console.log('🔍 Carregando projetos estourados...');
+      
       const response = await fetch(`${API_BASE}/projects/over-budget`, {
         method: 'GET',
         headers: headers,
@@ -169,16 +440,21 @@ const CostManagement = () => {
       
       if (response.ok) {
         const data = await response.json();
+        console.log('✅ Projetos estourados carregados:', data);
         setOverBudgetProjects(Array.isArray(data) ? data : [data]);
+      } else {
+        console.error('❌ Erro ao carregar projetos estourados:', response.status);
       }
     } catch (error) {
-      console.error('Erro ao carregar projetos estourados:', error);
+      console.error('❌ Erro ao carregar projetos estourados:', error);
     }
   };
 
   const loadBudgetReport = async () => {
     try {
       const headers = await getAuthHeaders();
+      console.log('🔍 Carregando relatório de orçamento...');
+      
       const response = await fetch(`${API_BASE}/projects/budget-report`, {
         method: 'GET',
         headers: headers,
@@ -186,6 +462,8 @@ const CostManagement = () => {
       
       if (response.ok) {
         const data = await response.json();
+        console.log('✅ Relatório de orçamento carregado:', data);
+        
         // Se for um array, calcula totais de todos os projetos
         if (Array.isArray(data) && data.length > 0) {
           const totalBudget = data.reduce((sum, project) => sum + (project.totalBudget || 0), 0);
@@ -201,80 +479,308 @@ const CostManagement = () => {
         } else {
           setBudgetReport(data);
         }
+      } else {
+        console.error('❌ Erro ao carregar relatório de orçamento:', response.status);
       }
     } catch (error) {
-      console.error('Erro ao carregar relatório de orçamento:', error);
+      console.error('❌ Erro ao carregar relatório de orçamento:', error);
+    }
+  };
+
+  // NOVO: Criar serviço
+  const createService = async () => {
+    try {
+      const headers = await getAuthHeaders();
+      console.log('➕ Criando serviço:', newService);
+      
+      // Validações
+      if (!newService.name.trim()) {
+        Alert.alert('Erro', 'Nome do serviço é obrigatório');
+        return;
+      }
+      
+      if (!newService.unitOfMeasurement.trim()) {
+        Alert.alert('Erro', 'Unidade de medida é obrigatória');
+        return;
+      }
+
+      const serviceData = {
+        ...newService,
+        unitLaborCost: parseFloat(newService.unitLaborCost) || 0,
+        unitMaterialCost: parseFloat(newService.unitMaterialCost) || 0,
+        unitEquipmentCost: parseFloat(newService.unitEquipmentCost) || 0,
+      };
+
+      const response = await fetch(`${API_BASE}/services`, {
+        method: 'POST',
+        headers: headers,
+        body: JSON.stringify(serviceData),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        console.log('✅ Serviço criado:', data);
+        Alert.alert('Sucesso', 'Serviço criado com sucesso!');
+        setShowAddServiceModal(false);
+        resetNewServiceForm();
+        loadServices();
+      } else {
+        const errorData = await response.json();
+        console.error('❌ Erro ao criar serviço:', errorData);
+        Alert.alert('Erro', errorData.mensagem || 'Falha ao criar serviço');
+      }
+    } catch (error) {
+      console.error('❌ Erro ao criar serviço:', error);
+      Alert.alert('Erro', 'Erro de conexão');
     }
   };
 
   const addServiceToTask = async (taskId, serviceData) => {
     try {
+      const headers = await getAuthHeaders();
+      console.log('➕ [DEBUG] Adicionando serviço à tarefa:');
+      console.log('   - TaskID:', taskId);
+      console.log('   - ServiceData:', serviceData);
+      console.log('   - URL:', `${API_BASE}/tasks/${taskId}/services`);
+      
       const response = await fetch(`${API_BASE}/tasks/${taskId}/services`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: headers,
         body: JSON.stringify(serviceData),
       });
 
       if (response.ok) {
+        const data = await response.json();
+        console.log('✅ Serviço adicionado à tarefa:', data);
         Alert.alert('Sucesso', 'Serviço adicionado à tarefa com sucesso!');
-        loadTaskServices(taskId);
+        
+        // Recarregar dados relacionados
+        await Promise.all([
+          loadTaskServices(taskId),
+          loadTaskReport(taskId),
+        ]);
+        
+        // Recarregar lista de tarefas para atualizar custos
+        if (selectedProject) {
+          console.log('🔄 Recarregando tarefas do projeto para atualizar custos...');
+          await loadProjectTasks(selectedProject.id);
+        }
       } else {
-        Alert.alert('Erro', 'Falha ao adicionar serviço à tarefa');
+        const errorData = await response.json();
+        console.error('❌ Erro ao adicionar serviço à tarefa:', errorData);
+        Alert.alert('Erro', errorData.mensagem || 'Falha ao adicionar serviço à tarefa');
       }
     } catch (error) {
-      console.error('Erro ao adicionar serviço à tarefa:', error);
+      console.error('❌ Erro ao adicionar serviço à tarefa:', error);
       Alert.alert('Erro', 'Erro de conexão');
     }
   };
 
+  // NOVO: Adicionar serviço à tarefa via modal
+  const handleAddServiceToTask = async () => {
+    console.log('🔧 [DEBUG] handleAddServiceToTask iniciado');
+    console.log('   - selectedTaskId:', selectedTaskId);
+    console.log('   - serviceToTask:', serviceToTask);
+    
+    if (!selectedTaskId) {
+      Alert.alert('Erro', 'Nenhuma tarefa selecionada');
+      return;
+    }
+
+    if (!serviceToTask.serviceId) {
+      Alert.alert('Erro', 'Selecione um serviço');
+      return;
+    }
+
+    if (!serviceToTask.quantity || parseFloat(serviceToTask.quantity) <= 0) {
+      Alert.alert('Erro', 'Quantidade deve ser maior que zero');
+      return;
+    }
+
+    const serviceData = {
+      serviceId: serviceToTask.serviceId,
+      quantity: parseFloat(serviceToTask.quantity),
+      unitCostOverride: serviceToTask.unitCostOverride ? parseFloat(serviceToTask.unitCostOverride) : null,
+      notes: serviceToTask.notes || null
+    };
+
+    console.log('🚀 [DEBUG] Chamando addServiceToTask com:', selectedTaskId, serviceData);
+    await addServiceToTask(selectedTaskId, serviceData);
+    setShowAddServiceToTaskModal(false);
+    resetServiceToTaskForm();
+  };
+
+  // CORRIGIDO: URL da API
   const removeServiceFromTask = async (taskId, serviceId) => {
     try {
-      const response = await fetch(`${API_BASE}/task/${taskId}/services/${serviceId}`, {
+      const headers = await getAuthHeaders();
+      console.log('🗑️ Removendo serviço da tarefa:', taskId, serviceId);
+      
+      const response = await fetch(`${API_BASE}/tasks/${taskId}/services/${serviceId}`, {
         method: 'DELETE',
+        headers: headers,
       });
 
       if (response.ok) {
+        console.log('✅ Serviço removido da tarefa');
         Alert.alert('Sucesso', 'Serviço removido da tarefa!');
-        loadTaskServices(taskId);
+        
+        // Recarregar dados relacionados
+        await Promise.all([
+          loadTaskServices(taskId),
+          loadTaskReport(taskId),
+        ]);
+        
+        // Recarregar lista de tarefas para atualizar custos
+        if (selectedProject) {
+          console.log('🔄 Recarregando tarefas do projeto após remoção...');
+          await loadProjectTasks(selectedProject.id);
+        }
       } else {
-        Alert.alert('Erro', 'Falha ao remover serviço');
+        const errorData = await response.json();
+        console.error('❌ Erro ao remover serviço:', errorData);
+        Alert.alert('Erro', errorData.mensagem || 'Falha ao remover serviço');
       }
     } catch (error) {
-      console.error('Erro ao remover serviço:', error);
+      console.error('❌ Erro ao remover serviço:', error);
       Alert.alert('Erro', 'Erro de conexão');
     }
   };
 
   const recalculateTaskCosts = async (taskId) => {
     try {
+      const headers = await getAuthHeaders();
+      console.log('🔄 Recalculando custos da tarefa:', taskId);
+      
       const response = await fetch(`${API_BASE}/tasks/${taskId}/recalculate`, {
         method: 'POST',
+        headers: headers,
       });
 
       if (response.ok) {
+        console.log('✅ Custos da tarefa recalculados');
         Alert.alert('Sucesso', 'Custos da tarefa recalculados!');
         loadTaskReport(taskId);
+      } else {
+        const errorData = await response.json();
+        console.error('❌ Erro ao recalcular custos:', errorData);
+        Alert.alert('Erro', errorData.mensagem || 'Falha ao recalcular custos');
       }
     } catch (error) {
-      console.error('Erro ao recalcular custos:', error);
+      console.error('❌ Erro ao recalcular custos:', error);
+      Alert.alert('Erro', 'Erro de conexão');
     }
   };
 
   const recalculateProjectCosts = async (projectId) => {
     try {
+      const headers = await getAuthHeaders();
+      console.log('🔄 Recalculando custos do projeto:', projectId);
+      
       const response = await fetch(`${API_BASE}/projects/${projectId}/recalculate-cost`, {
         method: 'POST',
+        headers: headers,
       });
 
       if (response.ok) {
+        console.log('✅ Custos do projeto recalculados');
         Alert.alert('Sucesso', 'Custos do projeto recalculados!');
         loadProjectBudget(projectId);
+      } else {
+        const errorData = await response.json();
+        console.error('❌ Erro ao recalcular custos do projeto:', errorData);
+        Alert.alert('Erro', errorData.mensagem || 'Falha ao recalcular custos do projeto');
       }
     } catch (error) {
-      console.error('Erro ao recalcular custos do projeto:', error);
+      console.error('❌ Erro ao recalcular custos do projeto:', error);
+      Alert.alert('Erro', 'Erro de conexão');
     }
+  };
+
+  // NOVO: Atualizar progresso da tarefa
+  const updateTaskProgress = async () => {
+    try {
+      const headers = await getAuthHeaders();
+      console.log('📈 Atualizando progresso da tarefa:', selectedTaskId, progressUpdate);
+      
+      // Validações
+      const progress = parseFloat(progressUpdate.progressPercentage);
+      if (isNaN(progress) || progress < 0 || progress > 100) {
+        Alert.alert('Erro', 'Progresso deve ser entre 0 e 100%');
+        return;
+      }
+
+      const updateData = {
+        progressPercentage: progress,
+        notes: progressUpdate.notes || '',
+        actualHours: parseFloat(progressUpdate.actualHours) || 0,
+      };
+
+      const response = await fetch(`${API_BASE}/tasks/${selectedTaskId}/progress`, {
+        method: 'PUT',
+        headers: headers,
+        body: JSON.stringify(updateData),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        console.log('✅ Progresso atualizado:', data);
+        Alert.alert('Sucesso', 'Progresso da tarefa atualizado!');
+        setShowProgressModal(false);
+        resetProgressForm();
+        loadTaskReport(selectedTaskId);
+      } else {
+        const errorData = await response.json();
+        console.error('❌ Erro ao atualizar progresso:', errorData);
+        Alert.alert('Erro', errorData.mensagem || 'Falha ao atualizar progresso');
+      }
+    } catch (error) {
+      console.error('❌ Erro ao atualizar progresso:', error);
+      Alert.alert('Erro', 'Erro de conexão');
+    }
+  };
+
+  // NOVO: Selecionar projeto
+  const selectProject = async (project) => {
+    console.log('📌 Selecionando projeto:', project.name);
+    setSelectedProject(project);
+    setShowProjectSelector(false);
+    
+    // Carrega dados do projeto selecionado
+    await Promise.all([
+      loadProjectBudget(project.id),
+      loadProjectTasks(project.id),
+    ]);
+  };
+
+  // Funções auxiliares
+  const resetNewServiceForm = () => {
+    setNewService({
+      name: '',
+      description: '',
+      unitOfMeasurement: '',
+      unitLaborCost: '',
+      unitMaterialCost: '',
+      unitEquipmentCost: '',
+      isActive: true
+    });
+  };
+
+  const resetProgressForm = () => {
+    setProgressUpdate({
+      progressPercentage: '',
+      notes: '',
+      actualHours: ''
+    });
+  };
+
+  const resetServiceToTaskForm = () => {
+    setServiceToTask({
+      serviceId: null,
+      quantity: '',
+      unitCostOverride: '',
+      notes: ''
+    });
   };
 
   const handleSearch = (text) => {
@@ -352,7 +858,7 @@ const CostManagement = () => {
 
           <TouchableOpacity 
             style={styles.actionButton}
-            onPress={() => recalculateProjectCosts(2)}
+            onPress={() => selectedProject && recalculateProjectCosts(selectedProject.id)}
           >
             <Ionicons name="refresh" size={20} color="#fd7e14" />
             <Text style={styles.actionText}>Recalcular</Text>
@@ -501,55 +1007,126 @@ const CostManagement = () => {
 
   const renderTasksTab = () => (
     <View style={styles.tabContent}>
+      {/* Seletor de Projeto */}
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Gerenciamento de Custos por Tarefa</Text>
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>Projeto Selecionado</Text>
+          <View style={styles.headerButtons}>
+            <TouchableOpacity
+              style={styles.refreshButton}
+              onPress={() => selectedProject && loadProjectTasks(selectedProject.id)}
+            >
+              <Ionicons name="refresh" size={20} color="#28a745" />
+              <Text style={styles.refreshButtonText}>Atualizar</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.selectButton}
+              onPress={() => setShowProjectSelector(true)}
+            >
+              <Ionicons name="swap-horizontal" size={20} color="#007AFF" />
+              <Text style={styles.selectButtonText}>Trocar</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
         
-        <TouchableOpacity
-          style={styles.taskButton}
-          onPress={() => {
-            setSelectedTaskId(1);
-            setShowTaskDetailsModal(true);
-            loadTaskServices(1);
-            loadTaskReport(1);
-          }}
-        >
-          <View style={styles.taskInfo}>
-            <Text style={styles.taskTitle}>Escavação da fundação</Text>
-            <Text style={styles.taskSubtitle}>Ver custos e serviços</Text>
+        {selectedProject ? (
+          <View style={styles.selectedProjectCard}>
+            <Text style={styles.selectedProjectName}>{selectedProject.name}</Text>
+            <Text style={styles.selectedProjectDesc}>
+              {projectTasks.length} tarefa(s) disponível(is)
+            </Text>
           </View>
-          <Ionicons name="chevron-forward" size={20} color="#666" />
-        </TouchableOpacity>
+        ) : (
+          <Text style={styles.noProjectText}>Nenhum projeto selecionado</Text>
+        )}
+      </View>
 
-        <TouchableOpacity
-          style={styles.taskButton}
-          onPress={() => {
-            setSelectedTaskId(2);
-            setShowTaskDetailsModal(true);
-            loadTaskServices(2);
-            loadTaskReport(2);
-          }}
-        >
-          <View style={styles.taskInfo}>
-            <Text style={styles.taskTitle}>Concretagem da laje</Text>
-            <Text style={styles.taskSubtitle}>Ver custos e serviços</Text>
+      {/* Lista de Tarefas do Projeto */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Tarefas do Projeto</Text>
+        
+        {projectTasks.length === 0 ? (
+          <View style={styles.emptyContainer}>
+            <Ionicons name="clipboard-outline" size={48} color="#ccc" />
+            <Text style={styles.emptyText}>Nenhuma tarefa encontrada</Text>
+            <Text style={styles.emptySubtext}>
+              {selectedProject ? 'Este projeto não possui tarefas' : 'Selecione um projeto primeiro'}
+            </Text>
           </View>
-          <Ionicons name="chevron-forward" size={20} color="#666" />
-        </TouchableOpacity>
+        ) : (
+          projectTasks.map((task) => (
+            <TouchableOpacity
+              key={task.id}
+              style={styles.taskButton}
+              onPress={() => {
+                setSelectedTaskId(task.id);
+                setShowTaskDetailsModal(true);
+                loadTaskServices(task.id);
+                loadTaskReport(task.id);
+              }}
+            >
+              <View style={styles.taskInfo}>
+                <View style={styles.taskHeader}>
+                  <Text style={styles.taskTitle}>{task.title}</Text>
+                  {(!task.totalCost || task.totalCost === 0) && (
+                    <View style={styles.noCostBadge}>
+                      <Ionicons name="warning-outline" size={12} color="#f39c12" />
+                      <Text style={styles.noCostText}>S/ Custos</Text>
+                    </View>
+                  )}
+                </View>
+                <Text style={styles.taskSubtitle}>
+                  Status: {task.statusDescription || task.status} • 
+                  Progresso: {task.progressPercentage || 0}%
+                </Text>
+                <Text style={styles.taskCost}>
+                  Custo: {formatCurrency(task.totalCost || 0)}
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={20} color="#666" />
+            </TouchableOpacity>
+          ))
+        )}
       </View>
     </View>
   );
 
   const renderProjectsTab = () => (
     <View style={styles.tabContent}>
-      {projectBudget && (
+      {/* Seletor de Projeto */}
+      <View style={styles.section}>
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>Projeto Selecionado</Text>
+          <TouchableOpacity
+            style={styles.selectButton}
+            onPress={() => setShowProjectSelector(true)}
+          >
+            <Ionicons name="swap-horizontal" size={20} color="#007AFF" />
+            <Text style={styles.selectButtonText}>Trocar</Text>
+          </TouchableOpacity>
+        </View>
+        
+        {selectedProject ? (
+          <View style={styles.selectedProjectCard}>
+            <Text style={styles.selectedProjectName}>{selectedProject.name}</Text>
+            <Text style={styles.selectedProjectDesc}>
+              Orçamento: {formatCurrency(selectedProject.budget || 0)}
+            </Text>
+          </View>
+        ) : (
+          <Text style={styles.noProjectText}>Nenhum projeto selecionado</Text>
+        )}
+      </View>
+
+      {projectBudget && selectedProject && (
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>{projectBudget.projectName}</Text>
+          <Text style={styles.sectionTitle}>Resumo Orçamentário</Text>
           
           <View style={styles.budgetCard}>
             <View style={styles.budgetHeader}>
               <Text style={styles.budgetTitle}>Resumo Orçamentário</Text>
               <TouchableOpacity
-                onPress={() => recalculateProjectCosts(projectBudget.projectId)}
+                onPress={() => selectedProject && recalculateProjectCosts(selectedProject.id)}
               >
                 <Ionicons name="refresh" size={20} color="#007AFF" />
               </TouchableOpacity>
@@ -738,36 +1315,439 @@ const CostManagement = () => {
             )}
 
             <View style={styles.modalSection}>
-              <Text style={styles.modalSectionTitle}>Serviços da Tarefa</Text>
-              {taskServices.map((service) => (
-                <View key={service.id} style={styles.taskServiceCard}>
-                  <View style={styles.taskServiceHeader}>
-                    <Text style={styles.taskServiceName}>{service.serviceName}</Text>
-                    <TouchableOpacity
-                      onPress={() => removeServiceFromTask(selectedTaskId, service.serviceId)}
-                    >
-                      <Ionicons name="trash-outline" size={20} color="#dc3545" />
-                    </TouchableOpacity>
-                  </View>
-                  <Text style={styles.taskServiceDesc}>{service.serviceDescription}</Text>
-                  <View style={styles.taskServiceInfo}>
-                    <Text>Qtd: {service.quantity} {service.unitOfMeasurement}</Text>
-                    <Text>Total: {formatCurrency(service.totalCost)}</Text>
-                  </View>
-                  {service.notes && (
-                    <Text style={styles.taskServiceNotes}>Obs: {service.notes}</Text>
-                  )}
+              <View style={styles.sectionHeader}>
+                <Text style={styles.modalSectionTitle}>Serviços da Tarefa</Text>
+                <TouchableOpacity
+                  style={styles.addServiceToTaskButton}
+                  onPress={() => setShowAddServiceToTaskModal(true)}
+                >
+                  <Ionicons name="add" size={20} color="#007AFF" />
+                  <Text style={styles.addServiceButtonText}>Adicionar</Text>
+                </TouchableOpacity>
+              </View>
+              
+              {taskServices.length === 0 ? (
+                <View style={styles.emptyContainer}>
+                  <Ionicons name="construct-outline" size={48} color="#ccc" />
+                  <Text style={styles.emptyText}>Nenhum serviço associado</Text>
+                  <Text style={styles.emptySubtext}>
+                    Adicione serviços para calcular os custos da tarefa
+                  </Text>
                 </View>
-              ))}
+              ) : (
+                                 taskServices.map((service) => (
+                  <View key={service.id} style={styles.taskServiceCard}>
+                    <View style={styles.taskServiceHeader}>
+                      <Text style={styles.taskServiceName}>{service.serviceName}</Text>
+                      <TouchableOpacity
+                        onPress={() => removeServiceFromTask(selectedTaskId, service.serviceId)}
+                      >
+                        <Ionicons name="trash-outline" size={20} color="#dc3545" />
+                      </TouchableOpacity>
+                    </View>
+                    <Text style={styles.taskServiceDesc}>{service.serviceDescription}</Text>
+                    <View style={styles.taskServiceInfo}>
+                      <Text>Qtd: {service.quantity} {service.unitOfMeasurement}</Text>
+                      <Text>Total: {formatCurrency(service.totalCost)}</Text>
+                    </View>
+                    {service.notes && (
+                      <Text style={styles.taskServiceNotes}>Obs: {service.notes}</Text>
+                    )}
+                  </View>
+                ))
+              )}
             </View>
 
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                style={styles.recalculateButton}
+                onPress={() => recalculateTaskCosts(selectedTaskId)}
+              >
+                <Ionicons name="refresh" size={20} color="#fff" />
+                <Text style={styles.recalculateText}>Recalcular Custos</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.progressButton}
+                onPress={() => {
+                  setShowProgressModal(true);
+                }}
+              >
+                <Ionicons name="trending-up" size={20} color="#fff" />
+                <Text style={styles.progressButtonText}>Atualizar Progresso</Text>
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
+        </View>
+      </Modal>
+
+      {/* Modal de Criação de Serviço */}
+      <Modal
+        visible={showAddServiceModal}
+        animationType="slide"
+        presentationStyle="pageSheet"
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Novo Serviço</Text>
             <TouchableOpacity
-              style={styles.recalculateButton}
-              onPress={() => recalculateTaskCosts(selectedTaskId)}
+              onPress={() => {
+                setShowAddServiceModal(false);
+                resetNewServiceForm();
+              }}
             >
-              <Ionicons name="refresh" size={20} color="#fff" />
-              <Text style={styles.recalculateText}>Recalcular Custos</Text>
+              <Ionicons name="close" size={24} color="#666" />
             </TouchableOpacity>
+          </View>
+
+          <ScrollView style={styles.modalContent}>
+            <View style={styles.formGroup}>
+              <Text style={styles.formLabel}>Nome do Serviço *</Text>
+              <TextInput
+                style={styles.formInput}
+                placeholder="Ex: Alvenaria de tijolos"
+                value={newService.name}
+                onChangeText={(text) => setNewService({...newService, name: text})}
+              />
+            </View>
+
+            <View style={styles.formGroup}>
+              <Text style={styles.formLabel}>Descrição</Text>
+              <TextInput
+                style={[styles.formInput, styles.textArea]}
+                placeholder="Descrição detalhada do serviço"
+                value={newService.description}
+                onChangeText={(text) => setNewService({...newService, description: text})}
+                multiline
+                numberOfLines={3}
+              />
+            </View>
+
+            <View style={styles.formGroup}>
+              <Text style={styles.formLabel}>Unidade de Medida *</Text>
+              <TextInput
+                style={styles.formInput}
+                placeholder="Ex: m², m³, un"
+                value={newService.unitOfMeasurement}
+                onChangeText={(text) => setNewService({...newService, unitOfMeasurement: text})}
+              />
+            </View>
+
+            <View style={styles.formRow}>
+              <View style={styles.formGroupHalf}>
+                <Text style={styles.formLabel}>Custo Mão de Obra</Text>
+                <TextInput
+                  style={styles.formInput}
+                  placeholder="0,00"
+                  value={newService.unitLaborCost}
+                  onChangeText={(text) => setNewService({...newService, unitLaborCost: text})}
+                  keyboardType="numeric"
+                />
+              </View>
+
+              <View style={styles.formGroupHalf}>
+                <Text style={styles.formLabel}>Custo Material</Text>
+                <TextInput
+                  style={styles.formInput}
+                  placeholder="0,00"
+                  value={newService.unitMaterialCost}
+                  onChangeText={(text) => setNewService({...newService, unitMaterialCost: text})}
+                  keyboardType="numeric"
+                />
+              </View>
+            </View>
+
+            <View style={styles.formGroup}>
+              <Text style={styles.formLabel}>Custo Equipamento</Text>
+              <TextInput
+                style={styles.formInput}
+                placeholder="0,00"
+                value={newService.unitEquipmentCost}
+                onChangeText={(text) => setNewService({...newService, unitEquipmentCost: text})}
+                keyboardType="numeric"
+              />
+            </View>
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                style={styles.cancelButton}
+                onPress={() => {
+                  setShowAddServiceModal(false);
+                  resetNewServiceForm();
+                }}
+              >
+                <Text style={styles.cancelButtonText}>Cancelar</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.createButton}
+                onPress={createService}
+              >
+                <Ionicons name="add" size={20} color="#fff" />
+                <Text style={styles.createButtonText}>Criar Serviço</Text>
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
+        </View>
+      </Modal>
+
+      {/* Modal de Atualização de Progresso */}
+      <Modal
+        visible={showProgressModal}
+        animationType="slide"
+        presentationStyle="pageSheet"
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Atualizar Progresso</Text>
+            <TouchableOpacity
+              onPress={() => {
+                setShowProgressModal(false);
+                resetProgressForm();
+              }}
+            >
+              <Ionicons name="close" size={24} color="#666" />
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView style={styles.modalContent}>
+            <View style={styles.formGroup}>
+              <Text style={styles.formLabel}>Progresso (%) *</Text>
+              <TextInput
+                style={styles.formInput}
+                placeholder="0 - 100"
+                value={progressUpdate.progressPercentage}
+                onChangeText={(text) => setProgressUpdate({...progressUpdate, progressPercentage: text})}
+                keyboardType="numeric"
+              />
+            </View>
+
+            <View style={styles.formGroup}>
+              <Text style={styles.formLabel}>Horas Trabalhadas</Text>
+              <TextInput
+                style={styles.formInput}
+                placeholder="0"
+                value={progressUpdate.actualHours}
+                onChangeText={(text) => setProgressUpdate({...progressUpdate, actualHours: text})}
+                keyboardType="numeric"
+              />
+            </View>
+
+            <View style={styles.formGroup}>
+              <Text style={styles.formLabel}>Observações</Text>
+              <TextInput
+                style={[styles.formInput, styles.textArea]}
+                placeholder="Descreva o progresso realizado..."
+                value={progressUpdate.notes}
+                onChangeText={(text) => setProgressUpdate({...progressUpdate, notes: text})}
+                multiline
+                numberOfLines={4}
+              />
+            </View>
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                style={styles.cancelButton}
+                onPress={() => {
+                  setShowProgressModal(false);
+                  resetProgressForm();
+                }}
+              >
+                <Text style={styles.cancelButtonText}>Cancelar</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.updateButton}
+                onPress={updateTaskProgress}
+              >
+                <Ionicons name="trending-up" size={20} color="#fff" />
+                <Text style={styles.updateButtonText}>Atualizar</Text>
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
+        </View>
+      </Modal>
+
+      {/* Modal de Seleção de Projeto */}
+      <Modal
+        visible={showProjectSelector}
+        animationType="slide"
+        presentationStyle="pageSheet"
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Selecionar Projeto</Text>
+            <TouchableOpacity
+              onPress={() => setShowProjectSelector(false)}
+            >
+              <Ionicons name="close" size={24} color="#666" />
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView style={styles.modalContent}>
+            {projects.length === 0 ? (
+              <View style={styles.emptyContainer}>
+                <Ionicons name="folder-outline" size={48} color="#ccc" />
+                <Text style={styles.emptyText}>Nenhum projeto encontrado</Text>
+                <TouchableOpacity 
+                  style={styles.retryButton}
+                  onPress={loadProjects}
+                >
+                  <Text style={styles.retryText}>Recarregar</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              projects.map((project) => (
+                <TouchableOpacity
+                  key={project.id}
+                  style={[
+                    styles.projectSelectorCard,
+                    selectedProject?.id === project.id && styles.selectedProjectSelectorCard
+                  ]}
+                  onPress={() => selectProject(project)}
+                >
+                  <View style={styles.projectSelectorInfo}>
+                    <Text style={styles.projectSelectorName}>{project.name}</Text>
+                    <Text style={styles.projectSelectorDesc}>
+                      Orçamento: {formatCurrency(project.budget || 0)}
+                    </Text>
+                    {project.description && (
+                      <Text style={styles.projectSelectorSubDesc}>
+                        {project.description}
+                      </Text>
+                    )}
+                  </View>
+                  {selectedProject?.id === project.id && (
+                    <Ionicons name="checkmark-circle" size={24} color="#007AFF" />
+                  )}
+                </TouchableOpacity>
+              ))
+            )}
+          </ScrollView>
+        </View>
+      </Modal>
+
+      {/* Modal de Adicionar Serviço à Tarefa */}
+      <Modal
+        visible={showAddServiceToTaskModal}
+        animationType="slide"
+        presentationStyle="pageSheet"
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Adicionar Serviço à Tarefa</Text>
+            <TouchableOpacity
+              onPress={() => {
+                setShowAddServiceToTaskModal(false);
+                resetServiceToTaskForm();
+              }}
+            >
+              <Ionicons name="close" size={24} color="#666" />
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView style={styles.modalContent}>
+            <View style={styles.formGroup}>
+              <Text style={styles.formLabel}>Selecionar Serviço *</Text>
+              <ScrollView style={styles.serviceSelector} showsVerticalScrollIndicator={false}>
+                {services.length === 0 ? (
+                  <View style={styles.emptyContainer}>
+                    <Text style={styles.emptyText}>Nenhum serviço disponível</Text>
+                    <TouchableOpacity 
+                      style={styles.retryButton}
+                      onPress={loadServices}
+                    >
+                      <Text style={styles.retryText}>Recarregar Serviços</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : (
+                  services.map((service) => (
+                    <TouchableOpacity
+                      key={service.id}
+                      style={[
+                        styles.serviceOption,
+                        { backgroundColor: serviceToTask.serviceId === service.id ? '#007AFF' : '#f8f9fa' }
+                      ]}
+                      onPress={() => setServiceToTask({...serviceToTask, serviceId: service.id})}
+                    >
+                      <View style={styles.serviceOptionInfo}>
+                        <Text style={[
+                          styles.serviceOptionName,
+                          { color: serviceToTask.serviceId === service.id ? '#fff' : '#333' }
+                        ]}>
+                          {service.name}
+                        </Text>
+                        <Text style={[
+                          styles.serviceOptionDesc,
+                          { color: serviceToTask.serviceId === service.id ? '#fff' : '#666' }
+                        ]}>
+                          {formatCurrency(service.totalUnitCost || 0)}/{service.unitOfMeasurement}
+                        </Text>
+                      </View>
+                      {serviceToTask.serviceId === service.id && (
+                        <Ionicons name="checkmark-circle" size={24} color="#fff" />
+                      )}
+                    </TouchableOpacity>
+                  ))
+                )}
+              </ScrollView>
+            </View>
+
+            <View style={styles.formRow}>
+              <View style={styles.formGroupHalf}>
+                <Text style={styles.formLabel}>Quantidade *</Text>
+                <TextInput
+                  style={styles.formInput}
+                  placeholder="Ex: 10"
+                  value={serviceToTask.quantity}
+                  onChangeText={(text) => setServiceToTask({...serviceToTask, quantity: text})}
+                  keyboardType="numeric"
+                />
+              </View>
+
+              <View style={styles.formGroupHalf}>
+                <Text style={styles.formLabel}>Custo Unitário (opcional)</Text>
+                <TextInput
+                  style={styles.formInput}
+                  placeholder="Sobrescrever custo"
+                  value={serviceToTask.unitCostOverride}
+                  onChangeText={(text) => setServiceToTask({...serviceToTask, unitCostOverride: text})}
+                  keyboardType="numeric"
+                />
+              </View>
+            </View>
+
+            <View style={styles.formGroup}>
+              <Text style={styles.formLabel}>Observações</Text>
+              <TextInput
+                style={[styles.formInput, styles.textArea]}
+                placeholder="Observações sobre este serviço..."
+                value={serviceToTask.notes}
+                onChangeText={(text) => setServiceToTask({...serviceToTask, notes: text})}
+                multiline
+                numberOfLines={3}
+              />
+            </View>
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                style={styles.cancelButton}
+                onPress={() => {
+                  setShowAddServiceToTaskModal(false);
+                  resetServiceToTaskForm();
+                }}
+              >
+                <Text style={styles.cancelButtonText}>Cancelar</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.createButton}
+                onPress={handleAddServiceToTask}
+              >
+                <Ionicons name="add" size={20} color="#fff" />
+                <Text style={styles.createButtonText}>Adicionar</Text>
+              </TouchableOpacity>
+            </View>
           </ScrollView>
         </View>
       </Modal>
@@ -1031,6 +2011,12 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: '#333',
+    flex: 1,
+  },
+  taskHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     marginBottom: 4,
   },
   taskSubtitle: {
@@ -1147,6 +2133,12 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#333',
     marginBottom: 15,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
   },
   taskReportCard: {
     backgroundColor: '#fff',
@@ -1316,6 +2308,273 @@ const styles = StyleSheet.create({
     color: '#999',
     fontStyle: 'italic',
     marginTop: 10,
+  },
+
+  // Novos estilos para formulários e modais
+  modalActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 10,
+    marginTop: 20,
+  },
+  progressButton: {
+    backgroundColor: '#28a745',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 15,
+    borderRadius: 8,
+    flex: 1,
+  },
+  progressButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+    marginLeft: 8,
+  },
+  formGroup: {
+    marginBottom: 20,
+  },
+  formRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  formGroupHalf: {
+    flex: 1,
+  },
+  formLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 8,
+  },
+  formInput: {
+    borderWidth: 1,
+    borderColor: '#e1e5e9',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 16,
+    backgroundColor: '#fff',
+  },
+  textArea: {
+    height: 80,
+    textAlignVertical: 'top',
+  },
+  cancelButton: {
+    backgroundColor: '#6c757d',
+    padding: 15,
+    borderRadius: 8,
+    flex: 1,
+    alignItems: 'center',
+  },
+  cancelButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  createButton: {
+    backgroundColor: '#007AFF',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 15,
+    borderRadius: 8,
+    flex: 1,
+  },
+  createButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+    marginLeft: 8,
+  },
+  updateButton: {
+    backgroundColor: '#28a745',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 15,
+    borderRadius: 8,
+    flex: 1,
+  },
+  updateButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+    marginLeft: 8,
+  },
+
+  // Estilos para seleção de projeto
+  selectButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f8f9fa',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#007AFF',
+  },
+  selectButtonText: {
+    color: '#007AFF',
+    fontSize: 14,
+    fontWeight: '600',
+    marginLeft: 4,
+  },
+  selectedProjectCard: {
+    backgroundColor: '#fff',
+    padding: 15,
+    borderRadius: 8,
+    borderLeftWidth: 4,
+    borderLeftColor: '#007AFF',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  selectedProjectName: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 4,
+  },
+  selectedProjectDesc: {
+    fontSize: 14,
+    color: '#666',
+  },
+  noProjectText: {
+    fontSize: 16,
+    color: '#999',
+    textAlign: 'center',
+    padding: 20,
+    fontStyle: 'italic',
+  },
+  projectSelectorCard: {
+    backgroundColor: '#fff',
+    padding: 15,
+    borderRadius: 8,
+    marginBottom: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#e9ecef',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  selectedProjectSelectorCard: {
+    borderColor: '#007AFF',
+    backgroundColor: '#f8f9ff',
+  },
+  projectSelectorInfo: {
+    flex: 1,
+  },
+  projectSelectorName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 4,
+  },
+  projectSelectorDesc: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 2,
+  },
+  projectSelectorSubDesc: {
+    fontSize: 12,
+    color: '#999',
+  },
+
+  // Estilos para adicionar serviço à tarefa
+  addServiceToTaskButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f8f9fa',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#007AFF',
+  },
+  addServiceButtonText: {
+    color: '#007AFF',
+    fontSize: 14,
+    fontWeight: '600',
+    marginLeft: 4,
+  },
+  serviceSelector: {
+    maxHeight: 200,
+    borderWidth: 1,
+    borderColor: '#e1e5e9',
+    borderRadius: 8,
+    backgroundColor: '#fff',
+  },
+  serviceOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f3f4',
+  },
+  serviceOptionInfo: {
+    flex: 1,
+  },
+  serviceOptionName: {
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 2,
+  },
+  serviceOptionDesc: {
+    fontSize: 14,
+  },
+
+  // Estilos para indicador de sem custos
+  noCostBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff3cd',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: '#f39c12',
+  },
+  noCostText: {
+    fontSize: 10,
+    color: '#f39c12',
+    fontWeight: '600',
+    marginLeft: 2,
+  },
+  taskCost: {
+    fontSize: 14,
+    color: '#007AFF',
+    fontWeight: '600',
+    marginTop: 4,
+  },
+
+  // Estilos para botões do cabeçalho
+  headerButtons: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  refreshButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f8f9fa',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#28a745',
+  },
+  refreshButtonText: {
+    color: '#28a745',
+    fontSize: 14,
+    fontWeight: '600',
+    marginLeft: 4,
   },
 });
 
