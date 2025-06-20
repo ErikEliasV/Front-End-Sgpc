@@ -277,13 +277,16 @@ const CostManagement = () => {
         );
         
         setProjectTasks(tasksWithCosts);
+        return tasksWithCosts; // Retornar as tarefas carregadas
       } else {
         console.log('⚠️ Nenhuma tarefa encontrada para o projeto:', projectId);
         setProjectTasks([]);
+        return [];
       }
     } catch (error) {
       console.error('❌ Erro ao carregar tarefas do projeto:', error);
       setProjectTasks([]);
+      return [];
     }
   };
 
@@ -406,22 +409,103 @@ const CostManagement = () => {
     }
   };
 
-  const loadProjectBudget = async (projectId) => {
+  const loadProjectBudget = async (projectId, tasksArray = null) => {
     try {
       const headers = await getAuthHeaders();
-      console.log('🔍 Carregando orçamento do projeto:', projectId);
+      console.log('🔍 [DEBUG] Carregando orçamento do projeto:', projectId);
       
-      const response = await fetch(`${API_BASE}/projects/${projectId}/budget`, {
-        method: 'GET',
-        headers: headers,
-      });
+      // Tentar múltiplos endpoints para orçamento
+      const budgetEndpoints = [
+        `${API_BASE}/projects/${projectId}/budget`,
+        `${API_BASE}/projects/${projectId}/costs`,
+        `${API_BASE}/projects/${projectId}` // Endpoint básico do projeto
+      ];
       
-      if (response.ok) {
-        const data = await response.json();
-        console.log('✅ Orçamento do projeto carregado:', data);
-        setProjectBudget(data);
+      let budgetData = null;
+      let foundBudget = false;
+      
+      for (const endpoint of budgetEndpoints) {
+        try {
+          console.log('🌐 Tentando endpoint de orçamento:', endpoint);
+          
+          const response = await fetch(endpoint, {
+            method: 'GET',
+            headers: headers,
+          });
+          
+          if (response.ok) {
+            const data = await response.json();
+            console.log('📊 Resposta do endpoint', endpoint, ':', data);
+            
+            // Se for o endpoint básico do projeto, extrair dados de orçamento
+            if (endpoint.includes(`/projects/${projectId}`) && !endpoint.includes('/budget') && !endpoint.includes('/costs')) {
+              if (data.budget || data.totalBudget) {
+                budgetData = {
+                  totalBudget: data.budget || data.totalBudget || 0,
+                  realizedCost: data.realizedCost || 0,
+                  budgetVariance: (data.budget || data.totalBudget || 0) - (data.realizedCost || 0),
+                  budgetUsagePercentage: data.budget ? Math.round(((data.realizedCost || 0) / data.budget) * 100) : 0,
+                  isOverBudget: (data.realizedCost || 0) > (data.budget || data.totalBudget || 0),
+                  completedTasks: data.completedTasks || 0,
+                  pendingTasks: data.pendingTasks || 0,
+                  totalTasks: data.totalTasks || 0
+                };
+                foundBudget = true;
+                break;
+              }
+            }
+            // Se for endpoint específico de orçamento
+            else if (data && (data.totalBudget !== undefined || data.budget !== undefined)) {
+              budgetData = data;
+              foundBudget = true;
+              break;
+            }
+          } else {
+            console.log('⚠️ Endpoint', endpoint, 'retornou status:', response.status);
+          }
+        } catch (endpointError) {
+          console.log('❌ Erro no endpoint', endpoint, ':', endpointError.message);
+        }
+      }
+      
+      if (foundBudget && budgetData) {
+        console.log('✅ Orçamento do projeto carregado:', budgetData);
+        
+        // SEMPRE usar o cálculo local das tarefas (mais confiável)
+        const tasksCost = calculateTotalTasksCost(tasksArray);
+        console.log('🔄 [PRIORITY] Usando sempre custo das tarefas:', tasksCost);
+        console.log('🔄 [COMPARE] API retornou:', budgetData.realizedCost, '| Tarefas calculadas:', tasksCost);
+        console.log('🔄 [STATE] Tarefas no estado atual:', projectTasks.length);
+        console.log('🔄 [PARAM] Tarefas passadas por parâmetro:', tasksArray?.length || 0);
+        
+        // Sobrescrever com dados calculados localmente
+        budgetData.realizedCost = tasksCost;
+        budgetData.budgetVariance = budgetData.totalBudget - tasksCost;
+        budgetData.budgetUsagePercentage = budgetData.totalBudget > 0 ? 
+          Math.round((tasksCost / budgetData.totalBudget) * 100) : 0;
+        budgetData.isOverBudget = tasksCost > budgetData.totalBudget;
+        
+        setProjectBudget(budgetData);
       } else {
-        console.error('❌ Erro ao carregar orçamento do projeto:', response.status);
+        console.log('⚠️ Nenhum orçamento encontrado, usando dados do projeto selecionado');
+        // Fallback: usar dados básicos do projeto selecionado
+        if (selectedProject) {
+          const tasksCost = calculateTotalTasksCost(tasksArray);
+          const tasksCount = tasksArray?.length || projectTasks.length;
+          const fallbackBudget = {
+            totalBudget: selectedProject.budget || 0,
+            realizedCost: tasksCost,
+            budgetVariance: (selectedProject.budget || 0) - tasksCost,
+            budgetUsagePercentage: selectedProject.budget > 0 ? 
+              Math.round((tasksCost / selectedProject.budget) * 100) : 0,
+            isOverBudget: tasksCost > (selectedProject.budget || 0),
+            completedTasks: 0,
+            pendingTasks: 0,
+            totalTasks: tasksCount
+          };
+          console.log('🔄 Usando dados de fallback com custos das tarefas:', fallbackBudget);
+          setProjectBudget(fallbackBudget);
+        }
       }
     } catch (error) {
       console.error('❌ Erro ao carregar orçamento do projeto:', error);
@@ -455,33 +539,65 @@ const CostManagement = () => {
       const headers = await getAuthHeaders();
       console.log('🔍 Carregando relatório de orçamento...');
       
-      const response = await fetch(`${API_BASE}/projects/budget-report`, {
-        method: 'GET',
-        headers: headers,
+      // Primeiro tentar a API
+      // Primeiro tentar API (agora corrigida) depois fallback local
+      try {
+        const response = await fetch(`${API_BASE}/projects/budget-report`, {
+          method: 'GET',
+          headers: headers,
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          console.log('✅ [COST] Relatório de orçamento carregado da API:', data);
+          
+          // A API retorna um ARRAY com dados de cada projeto
+          if (Array.isArray(data) && data.length > 0) {
+            console.log('✅ [COST] Processando array de projetos da API');
+            
+            // Calcular totais de todos os projetos
+            const totalBudget = data.reduce((sum, project) => sum + (project.totalBudget || 0), 0);
+            const totalRealized = data.reduce((sum, project) => sum + (project.realizedCost || 0), 0);
+            const avgProgress = data.reduce((sum, project) => sum + (project.progressPercentage || 0), 0) / data.length;
+            
+            setBudgetReport({
+              totalBudget,
+              realizedCost: totalRealized,
+              progressPercentage: Math.round(avgProgress),
+              projects: data
+            });
+            
+            console.log('✅ [COST] Relatório da API processado (após recálculo):', {
+              totalProjects: data.length,
+              totalBudget: totalBudget,
+              realizedCost: totalRealized,
+              progressPercentage: Math.round(avgProgress)
+            });
+            return;
+          }
+        }
+      } catch (apiError) {
+        console.log('⚠️ API de relatório falhou, calculando localmente...');
+      }
+      
+      // Fallback: calcular com base nos projetos e tarefas carregados
+      console.log('🔄 Calculando relatório de orçamento localmente...');
+      const calculatedTotals = await calculateAllProjectsCosts();
+      
+      setBudgetReport({
+        totalBudget: calculatedTotals.totalBudget,
+        realizedCost: calculatedTotals.realizedCost,
+        progressPercentage: calculatedTotals.progressPercentage,
+        projects: projects.map(project => ({
+          projectId: project.id,
+          projectName: project.name,
+          totalBudget: project.budget || 0,
+          realizedCost: 0, // Será calculado individualmente se necessário
+          progressPercentage: 0
+        }))
       });
       
-      if (response.ok) {
-        const data = await response.json();
-        console.log('✅ Relatório de orçamento carregado:', data);
-        
-        // Se for um array, calcula totais de todos os projetos
-        if (Array.isArray(data) && data.length > 0) {
-          const totalBudget = data.reduce((sum, project) => sum + (project.totalBudget || 0), 0);
-          const totalRealized = data.reduce((sum, project) => sum + (project.realizedCost || 0), 0);
-          const avgProgress = data.reduce((sum, project) => sum + (project.progressPercentage || 0), 0) / data.length;
-          
-          setBudgetReport({
-            totalBudget,
-            realizedCost: totalRealized,
-            progressPercentage: Math.round(avgProgress),
-            projects: data
-          });
-        } else {
-          setBudgetReport(data);
-        }
-      } else {
-        console.error('❌ Erro ao carregar relatório de orçamento:', response.status);
-      }
+      console.log('✅ Relatório calculado localmente:', calculatedTotals);
     } catch (error) {
       console.error('❌ Erro ao carregar relatório de orçamento:', error);
     }
@@ -560,10 +676,16 @@ const CostManagement = () => {
           loadTaskReport(taskId),
         ]);
         
-        // Recarregar lista de tarefas para atualizar custos
+        // Recarregar lista de tarefas e orçamento para atualizar custos
         if (selectedProject) {
-          console.log('🔄 Recarregando tarefas do projeto para atualizar custos...');
-          await loadProjectTasks(selectedProject.id);
+          console.log('🔄 Recarregando tarefas e orçamento do projeto...');
+          // Ordem sequencial para garantir que tarefas sejam carregadas antes do orçamento
+          const reloadedTasks = await loadProjectTasks(selectedProject.id);
+          await loadProjectBudget(selectedProject.id, reloadedTasks);
+          
+          // Recarregar também o relatório geral
+          console.log('🔄 Atualizando relatório geral...');
+          await loadBudgetReport();
         }
       } else {
         const errorData = await response.json();
@@ -631,10 +753,16 @@ const CostManagement = () => {
           loadTaskReport(taskId),
         ]);
         
-        // Recarregar lista de tarefas para atualizar custos
+        // Recarregar lista de tarefas e orçamento para atualizar custos
         if (selectedProject) {
-          console.log('🔄 Recarregando tarefas do projeto após remoção...');
-          await loadProjectTasks(selectedProject.id);
+          console.log('🔄 Recarregando tarefas e orçamento após remoção...');
+          // Ordem sequencial para garantir que tarefas sejam carregadas antes do orçamento
+          const reloadedTasks = await loadProjectTasks(selectedProject.id);
+          await loadProjectBudget(selectedProject.id, reloadedTasks);
+          
+          // Recarregar também o relatório geral
+          console.log('🔄 Atualizando relatório geral...');
+          await loadBudgetReport();
         }
       } else {
         const errorData = await response.json();
@@ -675,22 +803,51 @@ const CostManagement = () => {
   const recalculateProjectCosts = async (projectId) => {
     try {
       const headers = await getAuthHeaders();
-      console.log('🔄 Recalculando custos do projeto:', projectId);
+      console.log('🔄 [DEBUG] Recalculando custos do projeto:', projectId);
       
-      const response = await fetch(`${API_BASE}/projects/${projectId}/recalculate-cost`, {
-        method: 'POST',
-        headers: headers,
-      });
+      // Tentar múltiplos endpoints para recálculo
+      const recalcEndpoints = [
+        `${API_BASE}/projects/${projectId}/recalculate-cost`,
+        `${API_BASE}/projects/${projectId}/recalculate`,
+        `${API_BASE}/projects/${projectId}/costs/recalculate`
+      ];
+      
+      let recalculated = false;
+      
+      for (const endpoint of recalcEndpoints) {
+        try {
+          console.log('🌐 Tentando endpoint de recálculo:', endpoint);
+          
+          const response = await fetch(endpoint, {
+            method: 'POST',
+            headers: headers,
+          });
 
-      if (response.ok) {
-        console.log('✅ Custos do projeto recalculados');
-        Alert.alert('Sucesso', 'Custos do projeto recalculados!');
-        loadProjectBudget(projectId);
-      } else {
-        const errorData = await response.json();
-        console.error('❌ Erro ao recalcular custos do projeto:', errorData);
-        Alert.alert('Erro', errorData.mensagem || 'Falha ao recalcular custos do projeto');
+          if (response.ok) {
+            console.log('✅ Custos do projeto recalculados via', endpoint);
+            recalculated = true;
+            break;
+          } else {
+            console.log('⚠️ Endpoint', endpoint, 'retornou status:', response.status);
+          }
+        } catch (endpointError) {
+          console.log('❌ Erro no endpoint', endpoint, ':', endpointError.message);
+        }
       }
+      
+      if (recalculated) {
+        Alert.alert('Sucesso', 'Custos do projeto recalculados!');
+      } else {
+        console.log('⚠️ Nenhum endpoint de recálculo funcionou, forçando recarregamento...');
+        Alert.alert('Info', 'Atualizando dados do projeto...');
+      }
+      
+      // Sempre recarregar dados após tentativa de recálculo
+      console.log('🔄 Recarregando todos os dados do projeto...');
+      // Ordem sequencial para garantir consistência
+      const reloadedTasks = await loadProjectTasks(projectId);
+      await loadProjectBudget(projectId, reloadedTasks);
+      
     } catch (error) {
       console.error('❌ Erro ao recalcular custos do projeto:', error);
       Alert.alert('Erro', 'Erro de conexão');
@@ -742,15 +899,28 @@ const CostManagement = () => {
 
   // NOVO: Selecionar projeto
   const selectProject = async (project) => {
-    console.log('📌 Selecionando projeto:', project.name);
+    console.log('📌 [DEBUG] Selecionando projeto:', {
+      id: project.id,
+      name: project.name,
+      budget: project.budget,
+      originalData: project
+    });
+    
     setSelectedProject(project);
     setShowProjectSelector(false);
     
-    // Carrega dados do projeto selecionado
-    await Promise.all([
-      loadProjectBudget(project.id),
-      loadProjectTasks(project.id),
-    ]);
+    // Carrega dados completos do projeto selecionado
+    console.log('🔄 Carregando dados completos do projeto...');
+    
+    // Primeiro carregar tarefas, depois orçamento (ordem importante)
+    console.log('🔄 Carregando tarefas do projeto ID:', project.id);
+    const loadedTasks = await loadProjectTasks(project.id);
+    console.log('✅ Tarefas carregadas. Total retornado:', loadedTasks.length);
+    console.log('✅ Tarefas no estado:', projectTasks.length);
+    
+    console.log('🔄 Carregando orçamento do projeto...');
+    await loadProjectBudget(project.id, loadedTasks);
+    console.log('✅ Orçamento recalculado com base nas tarefas');
   };
 
   // Funções auxiliares
@@ -797,6 +967,158 @@ const CostManagement = () => {
       style: 'currency',
       currency: 'BRL',
     }).format(value);
+  };
+
+  // Função para calcular o total dos custos das tarefas
+  const calculateTotalTasksCost = (tasksArray = null) => {
+    const tasks = tasksArray || projectTasks;
+    console.log('🧮 [DEBUG] Calculando total dos custos das tarefas:');
+    console.log('   - Projeto selecionado:', selectedProject?.name, '(ID:', selectedProject?.id, ')');
+    console.log('   - Tarefas para calcular:', tasks.length);
+    console.log('   - Usando array passado:', tasksArray ? 'SIM' : 'NÃO (estado)');
+    
+    if (tasks.length === 0) {
+      console.log('⚠️ Nenhuma tarefa disponível para calcular custos');
+      return 0;
+    }
+    
+    const total = tasks.reduce((sum, task) => {
+      const taskCost = task.totalCost || 0;
+      console.log(`   - Tarefa "${task.title}" (ID: ${task.id}): R$ ${taskCost}`);
+      return sum + taskCost;
+    }, 0);
+    console.log('💰 Total calculado das tarefas:', total);
+    return total;
+  };
+
+  // Função para calcular custos de TODOS os projetos
+  const calculateAllProjectsCosts = async () => {
+    try {
+      console.log('🌍 [DEBUG] Calculando custos de todos os projetos...');
+      const headers = await getAuthHeaders();
+      
+      let totalBudget = 0;
+      let totalRealizedCost = 0;
+      let totalCompleted = 0;
+      let totalPending = 0;
+      
+      // Primeiro tentar usar endpoints individuais de orçamento por projeto
+      for (const project of projects) {
+        console.log(`🔍 Processando projeto: ${project.name} (ID: ${project.id})`);
+        
+        // SEMPRE calcular com base nas tarefas (API tem valores incorretos)
+        console.log(`🔄 [COST] Calculando via tarefas para projeto: ${project.name}`);
+        const projectTasksData = await loadProjectTasksForCalculation(project.id);
+        
+        // Calcular custo das tarefas
+        const projectCost = projectTasksData.reduce((sum, task) => sum + (task.totalCost || 0), 0);
+        
+        // Contar tarefas
+        const completedTasks = projectTasksData.filter(task => 
+          task.status === 'COMPLETED' || task.status === 'Concluída'
+        ).length;
+        const pendingTasks = projectTasksData.length - completedTasks;
+        
+        console.log(`💰 Projeto "${project.name}": Orçamento R$ ${project.budget || 0} | Custo R$ ${projectCost} | Tarefas: ${completedTasks}/${projectTasksData.length}`);
+        
+        totalBudget += project.budget || 0;
+        totalRealizedCost += projectCost;
+        totalCompleted += completedTasks;
+        totalPending += pendingTasks;
+      }
+      
+      console.log('🎯 TOTAIS CALCULADOS:');
+      console.log(`   - Orçamento Total: R$ ${totalBudget}`);
+      console.log(`   - Custo Realizado Total: R$ ${totalRealizedCost}`);
+      console.log(`   - Tarefas Concluídas: ${totalCompleted}`);
+      console.log(`   - Tarefas Pendentes: ${totalPending}`);
+      
+      return {
+        totalBudget,
+        realizedCost: totalRealizedCost,
+        progressPercentage: totalBudget > 0 ? Math.round((totalRealizedCost / totalBudget) * 100) : 0,
+        completedTasks: totalCompleted,
+        pendingTasks: totalPending,
+        totalTasks: totalCompleted + totalPending
+      };
+    } catch (error) {
+      console.error('❌ Erro ao calcular custos de todos os projetos:', error);
+      return { 
+        totalBudget: 0, 
+        realizedCost: 0, 
+        progressPercentage: 0,
+        completedTasks: 0,
+        pendingTasks: 0,
+        totalTasks: 0
+      };
+    }
+  };
+
+  // Função auxiliar para carregar tarefas sem afetar o estado
+  const loadProjectTasksForCalculation = async (projectId) => {
+    try {
+      const headers = await getAuthHeaders();
+      
+      // Tentar diferentes endpoints para obter tarefas do projeto
+      const endpoints = [
+        `https://sgpc-api.koyeb.app/api/projects/${projectId}/tasks/kanban`,
+        `https://sgpc-api.koyeb.app/api/projects/${projectId}/tasks`,
+        `https://sgpc-api.koyeb.app/api/tasks/project/${projectId}`,
+        `https://sgpc-api.koyeb.app/api/tasks`
+      ];
+      
+      for (const endpoint of endpoints) {
+        try {
+          const response = await fetch(endpoint, {
+            method: 'GET',
+            headers: headers,
+          });
+          
+          if (response.ok) {
+            const data = await response.json();
+            
+            // Se for o endpoint kanban, extrair tarefas de todas as colunas
+            if (endpoint.includes('/kanban') && data) {
+              const allTasks = [];
+              Object.keys(data).forEach(column => {
+                if (Array.isArray(data[column])) {
+                  allTasks.push(...data[column]);
+                }
+              });
+              
+              if (allTasks.length > 0) {
+                return allTasks;
+              }
+            }
+            // Se for array de tarefas
+            else if (Array.isArray(data)) {
+              // Se for o endpoint /tasks (todas as tarefas), filtrar por projectId
+              if (endpoint.includes('/tasks') && !endpoint.includes('/projects/')) {
+                const filteredTasks = data.filter(task => 
+                  task.projectId === projectId || 
+                  task.project?.id === projectId
+                );
+                
+                if (filteredTasks.length > 0) {
+                  return filteredTasks;
+                }
+              }
+              // Para outros endpoints, usar dados diretamente
+              else if (data.length > 0) {
+                return data;
+              }
+            }
+          }
+        } catch (endpointError) {
+          console.log('❌ Erro no endpoint', endpoint, ':', endpointError.message);
+        }
+      }
+      
+      return [];
+    } catch (error) {
+      console.error('❌ Erro ao carregar tarefas para cálculo:', error);
+      return [];
+    }
   };
 
   const renderOverviewTab = () => (
@@ -862,6 +1184,18 @@ const CostManagement = () => {
           >
             <Ionicons name="refresh" size={20} color="#fd7e14" />
             <Text style={styles.actionText}>Recalcular</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity 
+            style={styles.actionButton}
+            onPress={async () => {
+              console.log('🔄 Forçando atualização de todos os totais...');
+              await loadBudgetReport();
+              Alert.alert('Sucesso', 'Totais atualizados com base nos custos reais das tarefas!');
+            }}
+          >
+            <Ionicons name="calculator" size={20} color="#28a745" />
+            <Text style={styles.actionText}>Atualizar Totais</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -1110,7 +1444,15 @@ const CostManagement = () => {
           <View style={styles.selectedProjectCard}>
             <Text style={styles.selectedProjectName}>{selectedProject.name}</Text>
             <Text style={styles.selectedProjectDesc}>
-              Orçamento: {formatCurrency(selectedProject.budget || 0)}
+              💰 Orçamento Original: {formatCurrency(selectedProject.budget || 0)}
+            </Text>
+            {projectBudget && (
+              <Text style={styles.selectedProjectDesc}>
+                📊 Orçamento Sistema: {formatCurrency(projectBudget.totalBudget || 0)}
+              </Text>
+            )}
+            <Text style={styles.projectDebugInfo}>
+              🔍 Debug - ID: {selectedProject.id} | Budget: {selectedProject.budget}
             </Text>
           </View>
         ) : (
@@ -1125,11 +1467,33 @@ const CostManagement = () => {
           <View style={styles.budgetCard}>
             <View style={styles.budgetHeader}>
               <Text style={styles.budgetTitle}>Resumo Orçamentário</Text>
-              <TouchableOpacity
-                onPress={() => selectedProject && recalculateProjectCosts(selectedProject.id)}
-              >
-                <Ionicons name="refresh" size={20} color="#007AFF" />
-              </TouchableOpacity>
+              <View style={styles.budgetActions}>
+                <TouchableOpacity
+                  style={styles.syncButton}
+                  onPress={async () => {
+                    if (selectedProject) {
+                      console.log('🔄 [SYNC] Forçando sincronização completa...');
+                      
+                      // Primeiro recarregar tarefas, depois orçamento
+                      const syncedTasks = await loadProjectTasks(selectedProject.id);
+                      console.log('✅ [SYNC] Tarefas recarregadas');
+                      
+                      await loadProjectBudget(selectedProject.id, syncedTasks);
+                      console.log('✅ [SYNC] Orçamento recalculado');
+                      
+                      Alert.alert('Sucesso', `Dados sincronizados!\nCusto das tarefas: ${formatCurrency(calculateTotalTasksCost())}`);
+                    }
+                  }}
+                >
+                  <Ionicons name="sync" size={16} color="#28a745" />
+                  <Text style={styles.syncText}>Sync</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => selectedProject && recalculateProjectCosts(selectedProject.id)}
+                >
+                  <Ionicons name="refresh" size={20} color="#007AFF" />
+                </TouchableOpacity>
+              </View>
             </View>
 
             <View style={styles.budgetRow}>
@@ -1145,7 +1509,7 @@ const CostManagement = () => {
                 styles.budgetValue,
                 { color: projectBudget.isOverBudget ? '#dc3545' : '#28a745' }
               ]}>
-                {formatCurrency(projectBudget.realizedCost)}
+                {formatCurrency(projectBudget.realizedCost || calculateTotalTasksCost())}
               </Text>
             </View>
 
@@ -1153,11 +1517,20 @@ const CostManagement = () => {
               <Text style={styles.budgetLabel}>Variação:</Text>
               <Text style={[
                 styles.budgetValue,
-                { color: projectBudget.budgetVariance < 0 ? '#dc3545' : '#28a745' }
+                { color: (projectBudget.budgetVariance || (projectBudget.totalBudget - calculateTotalTasksCost())) < 0 ? '#dc3545' : '#28a745' }
               ]}>
-                {formatCurrency(projectBudget.budgetVariance)}
+                {formatCurrency(projectBudget.budgetVariance || (projectBudget.totalBudget - calculateTotalTasksCost()))}
               </Text>
             </View>
+
+            {calculateTotalTasksCost() > 0 && (
+              <View style={styles.calculatedCostNotice}>
+                <Ionicons name="calculator" size={16} color="#28a745" />
+                <Text style={styles.calculatedCostText}>
+                  ✅ Custos calculados em tempo real com base nas tarefas
+                </Text>
+              </View>
+            )}
 
             <View style={styles.progressContainer}>
               <Text style={styles.progressLabel}>Uso do Orçamento</Text>
@@ -2039,6 +2412,27 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 20,
   },
+  budgetActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  syncButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#e8f5e8',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#28a745',
+  },
+  syncText: {
+    color: '#28a745',
+    fontSize: 12,
+    fontWeight: '600',
+    marginLeft: 4,
+  },
   budgetTitle: {
     fontSize: 18,
     fontWeight: '600',
@@ -2442,6 +2836,29 @@ const styles = StyleSheet.create({
   selectedProjectDesc: {
     fontSize: 14,
     color: '#666',
+  },
+  projectDebugInfo: {
+    fontSize: 12,
+    color: '#999',
+    fontStyle: 'italic',
+    marginTop: 4,
+  },
+  calculatedCostNotice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#e8f5e8',
+    padding: 8,
+    borderRadius: 6,
+    marginTop: 10,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#28a745',
+  },
+  calculatedCostText: {
+    fontSize: 12,
+    color: '#28a745',
+    marginLeft: 6,
+    fontWeight: '600',
   },
   noProjectText: {
     fontSize: 16,

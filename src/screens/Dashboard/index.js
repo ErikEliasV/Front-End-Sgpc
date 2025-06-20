@@ -25,6 +25,7 @@ const Dashboard = () => {
 
   // URLs da API
   const API_BASE = 'https://sgpc-api.koyeb.app/api/cost';
+  const PROJECTS_API = 'https://sgpc-api.koyeb.app/api';
 
   // Função para obter o token de autenticação
   const getAuthToken = async () => {
@@ -46,39 +47,213 @@ const Dashboard = () => {
     };
   };
 
-  // Carregar dados dos projetos
-  const loadProjectsData = async () => {
+  // Função auxiliar para carregar tarefas de um projeto
+  const loadProjectTasks = async (projectId) => {
     try {
       const headers = await getAuthHeaders();
-      const response = await fetch(`${API_BASE}/projects/budget-report`, {
+      
+      // Tentar diferentes endpoints para obter tarefas do projeto
+      const endpoints = [
+        `${PROJECTS_API}/projects/${projectId}/tasks/kanban`,
+        `${PROJECTS_API}/projects/${projectId}/tasks`,
+        `${PROJECTS_API}/tasks/project/${projectId}`,
+        `${PROJECTS_API}/tasks`
+      ];
+      
+      for (const endpoint of endpoints) {
+        try {
+          const response = await fetch(endpoint, {
+            method: 'GET',
+            headers: headers,
+          });
+          
+          if (response.ok) {
+            const data = await response.json();
+            
+            // Se for o endpoint kanban, extrair tarefas de todas as colunas
+            if (endpoint.includes('/kanban') && data) {
+              const allTasks = [];
+              Object.keys(data).forEach(column => {
+                if (Array.isArray(data[column])) {
+                  allTasks.push(...data[column]);
+                }
+              });
+              
+              if (allTasks.length > 0) {
+                return allTasks;
+              }
+            }
+            // Se for array de tarefas
+            else if (Array.isArray(data)) {
+              // Se for o endpoint /tasks (todas as tarefas), filtrar por projectId
+              if (endpoint.includes('/tasks') && !endpoint.includes('/projects/')) {
+                const filteredTasks = data.filter(task => 
+                  task.projectId === projectId || 
+                  task.project?.id === projectId
+                );
+                
+                if (filteredTasks.length > 0) {
+                  return filteredTasks;
+                }
+              }
+              // Para outros endpoints, usar dados diretamente
+              else if (data.length > 0) {
+                return data;
+              }
+            }
+          }
+        } catch (endpointError) {
+          console.log('❌ Erro no endpoint', endpoint, ':', endpointError.message);
+        }
+      }
+      
+      return [];
+    } catch (error) {
+      console.error('❌ Erro ao carregar tarefas:', error);
+      return [];
+    }
+  };
+
+  // Função para calcular custos de todos os projetos
+  const calculateAllProjectsCosts = async () => {
+    try {
+      console.log('🌍 [DASHBOARD] Calculando custos de todos os projetos...');
+      const headers = await getAuthHeaders();
+      
+      // Primeiro carregar lista de projetos
+      const projectsResponse = await fetch(`${PROJECTS_API}/projects`, {
         method: 'GET',
         headers: headers,
       });
       
-      if (response.ok) {
-        const data = await response.json();
-        if (Array.isArray(data)) {
-          setProjectsData(data);
-          
-          // Calcular estatísticas
-          const totalBudget = data.reduce((sum, project) => sum + (project.totalBudget || 0), 0);
-          const totalRealized = data.reduce((sum, project) => sum + (project.realizedCost || 0), 0);
-          const totalCompleted = data.reduce((sum, project) => sum + (project.completedTasks || 0), 0);
-          const totalPending = data.reduce((sum, project) => sum + (project.pendingTasks || 0), 0);
-          
-          setStatsData({
-            totalProjects: data.length,
-            completedTasks: totalCompleted,
-            pendingTasks: totalPending,
-            totalBudget,
-            realizedCost: totalRealized
-          });
-        }
-      } else if (response.status === 401) {
-        Alert.alert('Erro de Autenticação', 'Sessão expirada. Faça login novamente.');
+      if (!projectsResponse.ok) {
+        throw new Error('Falha ao carregar projetos');
       }
+      
+      const projects = await projectsResponse.json();
+      console.log('📊 Projetos carregados:', projects.length);
+      
+      let totalBudget = 0;
+      let totalRealizedCost = 0;
+      let totalCompleted = 0;
+      let totalPending = 0;
+      const projectsWithCosts = [];
+      
+      for (const project of projects) {
+        console.log(`🔍 Processando projeto: ${project.name} (ID: ${project.id})`);
+        
+        let projectCost = 0;
+        let completedTasks = 0;
+        let pendingTasks = 0;
+        let projectTasks = [];
+        
+        // SEMPRE calcular com base nas tarefas (API tem valores incorretos)
+        console.log(`🔄 [DASHBOARD] Calculando via tarefas para projeto: ${project.name}`);
+        projectTasks = await loadProjectTasks(project.id);
+        
+        // Carregar custos das tarefas
+        for (const task of projectTasks) {
+          try {
+            const response = await fetch(`${API_BASE}/tasks/${task.id}/report`, {
+              method: 'GET',
+              headers: headers,
+            });
+            
+            if (response.ok) {
+              const taskReport = await response.json();
+              task.totalCost = taskReport.totalCost || 0;
+              console.log(`💰 [DASHBOARD] Custo da tarefa ${task.id}: R$ ${task.totalCost}`);
+            } else {
+              task.totalCost = 0;
+            }
+          } catch (error) {
+            console.log(`❌ [DASHBOARD] Erro ao carregar custo da tarefa ${task.id}:`, error.message);
+            task.totalCost = 0;
+          }
+        }
+        
+        // Calcular custo das tarefas
+        projectCost = projectTasks.reduce((sum, task) => sum + (task.totalCost || 0), 0);
+        
+        // Contar tarefas concluídas e pendentes
+        completedTasks = projectTasks.filter(task => 
+          task.status === 'COMPLETED' || task.status === 'Concluída'
+        ).length;
+        pendingTasks = projectTasks.length - completedTasks;
+        
+        console.log(`💰 [DASHBOARD] Projeto "${project.name}": Orçamento R$ ${project.totalBudget || project.budget || 0} | Custo R$ ${projectCost} | Tarefas: ${completedTasks}/${projectTasks.length}`);
+        
+        totalBudget += project.totalBudget || project.budget || 0;
+        totalRealizedCost += projectCost;
+        totalCompleted += completedTasks;
+        totalPending += pendingTasks;
+        
+        const projectBudget = project.totalBudget || project.budget || 0;
+        
+        projectsWithCosts.push({
+          projectId: project.id,
+          projectName: project.name,
+          totalBudget: projectBudget,
+          realizedCost: projectCost,
+          completedTasks,
+          pendingTasks,
+          totalTasks: projectTasks.length,
+          progressPercentage: projectBudget > 0 ? Math.round((projectCost / projectBudget) * 100) : 0,
+          isOverBudget: projectCost > projectBudget
+        });
+      }
+      
+      console.log('🎯 [DASHBOARD] TOTAIS GERAIS:');
+      console.log(`   - Projetos: ${projects.length}`);
+      console.log(`   - Orçamento Total: R$ ${totalBudget}`);
+      console.log(`   - Custo Realizado Total: R$ ${totalRealizedCost}`);
+      console.log(`   - Tarefas Concluídas: ${totalCompleted}`);
+      console.log(`   - Tarefas Pendentes: ${totalPending}`);
+      
+      return {
+        projects: projectsWithCosts,
+        stats: {
+          totalProjects: projects.length,
+          completedTasks: totalCompleted,
+          pendingTasks: totalPending,
+          totalBudget,
+          realizedCost: totalRealizedCost
+        }
+      };
     } catch (error) {
-      console.error('Erro ao carregar dados dos projetos:', error);
+      console.error('❌ Erro ao calcular custos de todos os projetos:', error);
+      return {
+        projects: [],
+        stats: {
+          totalProjects: 0,
+          completedTasks: 0,
+          pendingTasks: 0,
+          totalBudget: 0,
+          realizedCost: 0
+        }
+      };
+    }
+  };
+
+  // Carregar dados dos projetos
+  const loadProjectsData = async () => {
+    try {
+      const headers = await getAuthHeaders();
+      
+      // SEMPRE calcular localmente - API tem dados incorretos
+      console.log('🔄 [DASHBOARD] Forçando cálculo local (API tem valores incorretos)...');
+      
+      // Fallback: calcular com base nos projetos e tarefas
+      console.log('🔄 [DASHBOARD] Calculando dados localmente...');
+      const calculatedData = await calculateAllProjectsCosts();
+      
+      setProjectsData(calculatedData.projects);
+      setStatsData(calculatedData.stats);
+      
+      console.log('✅ [DASHBOARD] Dados calculados localmente');
+      
+    } catch (error) {
+      console.error('❌ Erro ao carregar dados dos projetos:', error);
       Alert.alert('Erro', 'Não foi possível carregar os dados. Verifique sua conexão.');
     }
   };
@@ -181,12 +356,12 @@ const Dashboard = () => {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Progresso dos Projetos</Text>
           
-          {projectsData.slice(0, 3).map((project) => (
-            <View key={project.projectId} style={styles.progressItem}>
+          {projectsData.slice(0, 3).map((project, index) => (
+            <View key={project.projectId || `project-${index}`} style={styles.progressItem}>
               <Text style={styles.progressLabel}>{project.projectName}</Text>
               <View style={styles.progressInfo}>
                 <Text style={styles.progressBudget}>
-                  {formatCurrency(project.realizedCost)} / {formatCurrency(project.totalBudget)}
+                  {formatCurrency(project.realizedCost || 0)} / {formatCurrency(project.totalBudget || 0)}
                 </Text>
                 <Text style={[
                   styles.progressStatus,
@@ -199,13 +374,13 @@ const Dashboard = () => {
                 <View style={[
                   styles.progressFill, 
                   { 
-                    width: `${calculateProgress(project.realizedCost, project.totalBudget)}%`,
+                    width: `${calculateProgress(project.realizedCost || 0, project.totalBudget || 0)}%`,
                     backgroundColor: project.isOverBudget ? '#dc3545' : '#007AFF'
                   }
                 ]} />
               </View>
               <Text style={styles.progressText}>
-                {calculateProgress(project.realizedCost, project.totalBudget).toFixed(1)}% utilizado
+                {calculateProgress(project.realizedCost || 0, project.totalBudget || 0).toFixed(1)}% utilizado
               </Text>
             </View>
           ))}
